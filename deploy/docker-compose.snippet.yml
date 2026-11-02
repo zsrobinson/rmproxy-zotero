@@ -13,7 +13,14 @@ services:
       - ./rmzotero/data:/data            # state, the exact-page archive, device token
     ports:
       - "8787:8787"                      # the plugin API; put it behind your tunnel/reverse proxy with HTTPS
+      - "8788:8788"                      # the Claude connector (only if [claude] secret is set); also behind HTTPS
     # environment:
     #   PUID: "1026"                      # run as this user/group; default: the owner of ./rmzotero/data
     #   PGID: "100"
     #   RMZOTERO_OCR_LANGUAGE: "eng+deu"  # tesseract languages (only English is in the image)
+
+  # Zotero's own metadata engine, used by the Claude connector to add items from DOIs, ISBNs and URLs.
+  translation-server:
+    image: zotero/translation-server:latest
+    pull_policy: always
+    restart: unless-stopped

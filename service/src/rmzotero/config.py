@@ -73,6 +73,11 @@ class Config:
     quiet_seconds: float = 120.0
     poll_seconds: float = 900.0
     defaults: Settings = field(default_factory=Settings)
+    # Claude connector (ADR 0015); disabled unless a secret is set
+    mcp_secret: str = ""
+    mcp_listen: str = "0.0.0.0:8788"
+    contact_email: str = ""  # sent to Unpaywall when looking for open-access PDFs
+    translation_server_url: str = "http://translation-server:1969"
 
     @classmethod
     def load(cls, path: Path | str) -> "Config":
@@ -80,6 +85,7 @@ class Config:
             raw = tomllib.load(f)
         env = os.environ.get
         z, w, r, a, s = (raw.get(k, {}) for k in ("zotero", "webdav", "rmfakecloud", "api", "sync"))
+        c, t = raw.get("claude", {}), raw.get("translation_server", {})
         defaults = Settings.from_dict({**s, "epub": raw.get("epub", {})})
         return cls(
             data_dir=Path(env("RMZOTERO_DATA_DIR") or raw.get("data_dir", "/data")),
@@ -94,6 +100,10 @@ class Config:
             quiet_seconds=float(s.get("quiet_seconds", 120)),
             poll_seconds=float(s.get("poll_seconds", 900)),
             defaults=defaults,
+            mcp_secret=env("RMZOTERO_MCP_SECRET") or c.get("secret", ""),
+            mcp_listen=c.get("listen", "0.0.0.0:8788"),
+            contact_email=env("RMZOTERO_CONTACT_EMAIL") or c.get("contact_email", ""),
+            translation_server_url=env("TRANSLATION_SERVER_URL") or t.get("url", "http://translation-server:1969"),
         )
 
 

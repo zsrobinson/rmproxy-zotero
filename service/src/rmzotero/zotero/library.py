@@ -73,6 +73,13 @@ class Library:
         self.state.save_zobjects([r for r in rows if not r[3].get("_deleted")], [o["key"] for o in objects if o.get("_deleted")])
         self._index()
 
+    def apply_local_collections(self, objects: list[dict]) -> None:
+        """Record collections we just wrote, ahead of the next pull."""
+        for o in objects:
+            self.collections[o["key"]] = o
+        self.state.save_zobjects([(o["key"], "collection", o.get("version", 0), o) for o in objects], [])
+        self._index()
+
     def forget(self, keys: list[str]) -> None:
         for k in keys:
             self.items.pop(k, None)

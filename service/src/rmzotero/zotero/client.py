@@ -42,6 +42,8 @@ class ZoteroAPI(Protocol):
 
     def delete_items(self, keys_versions: list[tuple[str, int]]) -> WriteResult: ...
 
+    def write_collections(self, objects: list[dict]) -> WriteResult: ...
+
 
 class ZoteroClient:
     BASE = "https://api.zotero.org"
@@ -88,10 +90,16 @@ class ZoteroClient:
         return collections, items, deleted, max(v1, v2, version)
 
     def write_items(self, objects: list[dict]) -> WriteResult:
+        return self._write("/items", objects)
+
+    def write_collections(self, objects: list[dict]) -> WriteResult:
+        return self._write("/collections", objects)
+
+    def _write(self, path: str, objects: list[dict]) -> WriteResult:
         res = WriteResult()
         for i in range(0, len(objects), 50):
             chunk = objects[i : i + 50]
-            r = self.http.post(self._url("/items"), json=chunk, headers=self.headers)
+            r = self.http.post(self._url(path), json=chunk, headers=self.headers)
             if r.status_code == 412:
                 res.conflicts.update(o["key"] for o in chunk if "key" in o)
                 continue
@@ -189,6 +197,25 @@ class MemoryZotero:
             data = {**(cur or {"_kind": "item", "tags": [], "relations": {}}), **{k: v for k, v in o.items() if k != "version"}, "key": key}
             data["version"] = self._bump()
             data["dateModified"] = _now_iso()
+            self.objects[key] = data
+            res.versions[key] = data["version"]
+        res.library_version = self.version
+        return res
+
+    def write_collections(self, objects: list[dict]) -> WriteResult:
+        res = WriteResult()
+        for o in objects:
+            key = o.get("key") or new_key()
+            cur = self.objects.get(key)
+            if "key" in o and "version" not in o:
+                res.failed[key] = "428: Either If-Unmodified-Since-Version or 'version' property must be provided for 'key'-based writes"
+                continue
+            expected = int(o.get("version", 0))
+            if (cur is None and expected != 0) or (cur is not None and expected != cur["version"]):
+                res.conflicts.add(key)
+                continue
+            data = {**(cur or {"_kind": "collection", "parentCollection": False}), **{k: v for k, v in o.items() if k != "version"}, "key": key}
+            data["version"] = self._bump()
             self.objects[key] = data
             res.versions[key] = data["version"]
         res.library_version = self.version

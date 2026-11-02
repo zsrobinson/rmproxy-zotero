@@ -14,6 +14,9 @@ dependencies = [
   "pikepdf>=8",
   "pypdfium2>=4",
   "typst>=0.11",
+  "mcp==1.30.0",
+  "uvicorn>=0.30",
+  "pillow>=10",
 ]
 
 [project.optional-dependencies]

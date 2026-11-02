@@ -4,6 +4,7 @@
 services:
   rmzotero:
     image: ghcr.io/zsrobinson/rmproxy-zotero:latest
+    pull_policy: always                  # check for a newer image every time the project starts or builds
     restart: unless-stopped
     depends_on:
       - rmfakecloud

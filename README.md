@@ -100,9 +100,13 @@ Check its log. A *permission denied* message means the container can't read `rmz
 
 ### Updating
 
+With `pull_policy: always` (in the snippet), restarting or rebuilding the project in Container Manager pulls the newest image. Over SSH:
+
 ```sh
 docker compose pull rmzotero && docker compose up -d rmzotero
 ```
+
+To see which commit you're running: `docker image inspect ghcr.io/zsrobinson/rmproxy-zotero:latest --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'`
 
 ## Using it
 

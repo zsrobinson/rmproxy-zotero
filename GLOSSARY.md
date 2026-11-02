@@ -63,7 +63,7 @@ The tablet folder, chosen by the user, under which the library's collections are
 _Avoid_: Zotero folder, mirror root
 
 **Pointer**:
-A one-page placeholder document left in the folder of each of an item's other collections, saying where on the tablet the real document lives.
+A one-page placeholder document left in the folder of another of an item's collections, saying where on the tablet the real document lives.
 _Avoid_: shortcut, alias, link
 
 **Zotero Layer**:

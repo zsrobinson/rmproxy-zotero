@@ -51,7 +51,7 @@ The small program on the tablet that redirects its cloud traffic to rmfakecloud.
 _Avoid_: rmfakeproxy, rmproxy
 
 **Document**:
-A PDF or EPUB as it exists on the tablet, with its pages and whatever has been written on them.
+A synced attachment as it exists on the tablet, with its pages and whatever has been written on them; each synced PDF attachment (or EPUB rendition) is its own document.
 _Avoid_: file, attachment (reserved for Zotero)
 
 **Folder**:

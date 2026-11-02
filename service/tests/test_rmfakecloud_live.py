@@ -66,6 +66,15 @@ def test_service_and_tablet_through_real_rmfakecloud(tmp_path):
     tablet.mirror()
     doc = next(d for d in tablet.docs.values() if d.name == "Vaswani - 2017 - Attention")
     assert tablet.path_of(doc.id) == ["rmzotero-live-test", "ML"]
+    assert tc.all_pages(doc.content) == []  # uploaded without a page list
+    # first open on the "tablet": it chooses its own page ids
+    tablet.stage(doc.id, content={**doc.content, "cPages": tc.new_pdf_content(doc.content.get("pageCount") or 1)["cPages"]})
+    assert tablet.commit() == []
+    eng.sync()
+    clock.advance(300)
+    assert not eng.sync().errors
+    tablet.mirror()
+    doc = tablet.docs[doc.id]
     pid = tc.pages(doc.content)[0].id
     page = Page.parse(tablet.read(doc.page_entries()[pid]))
     assert [m.on_zotero_layer for m in page.marks()] == [True]

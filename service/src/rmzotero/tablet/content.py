@@ -107,6 +107,14 @@ def new_pdf_content(page_count: int, file_type: str = "pdf", extra: dict | None 
     return content
 
 
+def upload_content(page_count: int, file_type: str = "pdf") -> dict:
+    """Content for a new upload, without a page list: the tablet creates that on first open."""
+    content = new_pdf_content(page_count, file_type)
+    content.pop("cPages")
+    content["pages"] = []
+    return content
+
+
 def ensure_cpages(content: dict, pdf_page_count: int) -> dict:
     """Return content with a ``cPages`` list, creating one from legacy data or the PDF page count."""
     if (content.get("cPages") or {}).get("pages"):

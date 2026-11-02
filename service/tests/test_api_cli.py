@@ -97,15 +97,28 @@ def test_check_commands(tmp_path, monkeypatch, capsys):
     assert cli.main(["--config", str(conf), "check-zotero", "--cleanup"]) == 0
     assert sum(1 for o in z.items() if o.get("itemType") == "annotation") == 0
 
+    # step 1: upload without a page list
     assert cli.main(["--config", str(conf), "check-tablet"]) == 0
-    assert cli.main(["--config", str(conf), "check-tablet", "--verify"]) == 1  # nothing drawn yet
+    assert cli.main(["--config", str(conf), "check-tablet", "--annotate"]) == 2  # not opened yet
     tablet = CloudTree(cloud, BlobCache(tmp_path / "t"))
-    tablet.mirror()
-    doc = next(d for d in tablet.docs.values() if d.name == cli.CHECK_DOC_NAME)
-    pid = tc.pages(doc.content)[0].id
-    page = Page.parse(tablet.read(doc.page_entries()[pid]))
-    page.add(page.first_user_layer_id(), [si.Line(si.PenColor.BLACK, si.Pen.PENCIL_2, [si.Point(0, 0, 0, 0, 8, 100), si.Point(5, 5, 0, 0, 8, 100)], 1.0, 0.0)])
-    tablet.stage(doc.id, files={f"/{pid}.rm": page.to_bytes()})
-    tablet.commit()
+
+    def tablet_draw(n):
+        tablet.root_hash = ""
+        tablet.mirror()
+        doc = next(d for d in tablet.docs.values() if d.name == cli.CHECK_DOC_NAME and not tablet.is_trashed(d.id))
+        content = doc.content if tc.all_pages(doc.content) else {**doc.content, "cPages": tc.new_pdf_content(2)["cPages"]}
+        pid = tc.pages(content)[0].id
+        e = doc.page_entries().get(pid)
+        page = Page.parse(tablet.read(e)) if e else Page.empty()
+        page.add(page.first_user_layer_id(), [si.Line(si.PenColor.BLACK, si.Pen.PENCIL_2, [si.Point(n, 0, 0, 0, 8, 100), si.Point(n + 5, 5, 0, 0, 8, 100)], 1.0, 0.0)])
+        tablet.stage(doc.id, content=content, files={f"/{pid}.rm": page.to_bytes()})
+        tablet.commit()
+
+    tablet_draw(0)  # the tablet opens it (making its own page ids) and the user draws
+    # step 2: the service adds its layer to the tablet's own page
+    assert cli.main(["--config", str(conf), "check-tablet", "--annotate"]) == 0
+    assert cli.main(["--config", str(conf), "check-tablet", "--verify"]) == 1  # no new writing yet
+    tablet_draw(10)
+    # step 3
     assert cli.main(["--config", str(conf), "check-tablet", "--verify"]) == 0
     assert "✓ The tablet kept" in capsys.readouterr().out

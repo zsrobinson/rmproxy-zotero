@@ -132,88 +132,116 @@ CHECK_DOC_NAME = "rmzotero check"
 
 
 def cmd_check_tablet(cfg: Config, args) -> int:
+    """Three steps, mirroring how the service really works with the tablet:
+
+    1. ``check-tablet``: upload a test PDF without a page list (the tablet makes its own on first open).
+    2. ``check-tablet --annotate``: after you've opened it and drawn on page 1, add a "Zotero" layer to
+       the tablet's own page 1 (a box and a highlight), keeping your writing.
+    3. ``check-tablet --verify``: after you've seen them and drawn a bit more, confirm nothing was lost.
+    """
+    from .pdf.edit import page_boxes
     from .pdf.simple import text_pdf
+    from .pdf.text import TextLayer, line_rects
     from .tablet import content as tc
     from .tablet.scene import Page
-    from .tablet.tree import BlobCache, CloudTree, new_metadata
+    from .tablet.tree import TRASH, BlobCache, CloudTree, new_metadata
 
     _z, _f, cloud = _clients(cfg)
     tree = CloudTree(cloud, BlobCache(cfg.data_dir / "blobs"))
     tree.mirror()
     existing = [d for d in tree.docs.values() if d.name == CHECK_DOC_NAME and not tree.is_trashed(d.id)]
-    if args.verify:
-        if not existing:
-            print("No check document on the tablet; run check-tablet first.")
-            return 2
-        doc = existing[0]
-        import datetime as _dt
+    state_file = cfg.data_dir / "check-tablet.json"
 
-        def when(ms):
-            try:
-                return _dt.datetime.fromtimestamp(int(ms) / 1000).isoformat(timespec="seconds") if ms else "never"
-            except ValueError:
-                return str(ms)
+    def first_page(doc):
+        listed = tc.pages(doc.content)
+        if not listed:
+            return None, None
+        pid = listed[0].id
+        e = doc.page_entries().get(pid)
+        return pid, e
 
-        print(f"Document: last modified {when(doc.metadata.get('lastModified'))}, last opened {when(doc.metadata.get('lastOpened'))}")
-        listed = tc.all_pages(doc.content)
-        files = doc.page_entries()
-        print(f"Page list: {len(listed)} pages ({sum(1 for p in listed if p.deleted)} deleted); page files: {len(files)}")
-        unlisted = [pid for pid in files if pid not in {p.id for p in listed}]
-        if unlisted:
-            print(f"  page files not in the page list: {len(unlisted)} (the tablet may have re-numbered pages)")
-        zotero_ok = False
-        user_items = 0
-        for i, pid in enumerate([p.id for p in listed] + unlisted):
-            e = files.get(pid)
-            if e is None:
-                print(f"  page {i + 1}: no writing")
-                continue
-            page = Page.parse(tree.read(e))
-            marks = page.marks()
-            z = [m for m in marks if m.on_zotero_layer]
-            u = [m for m in marks if not m.on_zotero_layer]
-            print(f"  page {i + 1}: layers {[label for _, label in page.layers()]}; Zotero layer {sum(m.is_stroke for m in z)} strokes + "
-                  f"{sum(m.is_highlight for m in z)} highlights; your layers {len(u)} items")
-            if sum(m.is_stroke for m in z) == 1 and sum(m.is_highlight for m in z) == 1:
-                zotero_ok = True
-            user_items += len(u)
-        print(f"Service's Zotero layer intact: {'yes' if zotero_ok else 'NO'}")
-        print(f"Your writing found: {'yes' if user_items >= 2 else 'not yet'} ({user_items} items on your layers; the service drew 1)")
-        ok = zotero_ok and user_items >= 2
-        if ok:
-            print("✓ The tablet kept the service's page and your writing.")
-        elif zotero_ok:
-            print("… The service's page survived, but your drawing hasn't arrived. Check the tablet has synced (no pending-sync icon), then run this again.")
+    def summarise(page: Page) -> tuple[int, int, int]:
+        marks = page.marks()
+        z = [m for m in marks if m.on_zotero_layer]
+        return sum(m.is_stroke for m in z), sum(m.is_highlight for m in z), sum(1 for m in marks if not m.on_zotero_layer)
+
+    if not (args.annotate or args.verify):
+        for d in existing:  # start clean
+            tree.stage(d.id, metadata={**d.metadata, "parent": TRASH})
+        pdf = text_pdf([[("rmzotero tablet check", 20), ("Highlighted text written by the service sits on this line.", 12),
+                         ("Step 1: draw a short line anywhere on this page, let the tablet sync, then run: rmzotero check-tablet --annotate", 11)],
+                        [("Page two", 14)]])
+        doc_id = str(uuid.uuid4())
+        tree.stage(doc_id, metadata=new_metadata(CHECK_DOC_NAME, ""), content=tc.upload_content(2), files={".pdf": pdf})
+        tree.commit()
+        state_file.unlink(missing_ok=True)
+        print(f"Uploaded '{CHECK_DOC_NAME}' to the top level of your tablet{' (the old one is in the tablet trash)' if existing else ''}.")
+        print("On the tablet: open it, draw a short line on page 1, close it and let it sync. Then run: rmzotero check-tablet --annotate")
+        return 0
+
+    if not existing:
+        print("No check document on the tablet; run check-tablet first.")
+        return 2
+    doc = existing[0]
+    pid, entry = first_page(doc)
+    if pid is None:
+        print("The tablet hasn't opened the document yet (it has no page list). Open it on the tablet, let it sync, and try again.")
+        return 2
+
+    if args.annotate:
+        if entry is not None:
+            data = tree.read(entry)
+            if not Page.roundtrips(data):
+                print("✗ The tablet's page uses a format the service can't reproduce exactly, so it won't edit it. Please share this output.")
+                return 1
+            page = Page.parse(data)
         else:
-            print("✗ The service's layer was lost; please share the output above.")
-        return 0 if ok else 1
-    pdf = text_pdf([[("rmzotero tablet check", 20), ("Highlighted text written by the service sits on this line.", 12),
-                     ("Draw anything on this page, let the tablet sync, then run: rmzotero check-tablet --verify", 11)],
-                    [("Page two", 14)]])
-    from .pdf.edit import page_boxes
-    from .pdf.text import TextLayer, line_rects
+            page = Page.empty()
+        zs, zh, mine = summarise(page)
+        if zs or zh:
+            print("This page already has a Zotero layer; run check-tablet --verify.")
+            return 0
+        pdf = tree.read(doc.file(".pdf"))
+        box = page_boxes(pdf)[0]
+        chars = TextLayer(pdf).chars(0)
+        start = "".join(c.text for c in chars).index("Highlighted")
+        hl_rect = box.user_rect_to_rm(line_rects(chars[start:start + 11])[0])
+        zl = page.zotero_layer_id()
+        page.add(zl, [
+            si.Line(si.PenColor.BLACK, si.Pen.FINELINER_2, [si.Point(x, y, 0, 0, 12, 100) for x, y in [(-300, 600), (300, 600), (300, 900), (-300, 900), (-300, 600)]], 1.0, 0.0),
+            si.GlyphRange(None, 11, "Highlighted", si.PenColor.HIGHLIGHT, [si.Rectangle(*hl_rect)], color_rgba=(166, 230, 120, 255)),
+        ])
+        tree.stage(doc.id, files={f"/{pid}.rm": page.to_bytes()})
+        if tree.commit():
+            print("The tablet changed the document at the same moment; run --annotate again.")
+            return 1
+        state_file.write_text(json.dumps({"doc": doc.id, "page": pid, "mine": mine}))
+        print(f"Added a 'Zotero' layer to page 1 (your page already had {mine} item{'s' if mine != 1 else ''}).")
+        print("On the tablet: open the document again. You should see a box in the upper middle and a highlight on the word 'Highlighted',")
+        print("on a layer called 'Zotero', with your line still there. Draw one more line, let it sync, then run: rmzotero check-tablet --verify")
+        return 0
 
-    content = tc.new_pdf_content(2)
-    pid = tc.pages(content)[0].id
-    box = page_boxes(pdf)[0]
-    chars = [c for c in TextLayer(pdf).chars(0)]
-    start = "".join(c.text for c in chars).index("Highlighted")
-    hl_rect = box.user_rect_to_rm(line_rects(chars[start:start + 11])[0])
-    page = Page.empty()
-    page.add(page.first_user_layer_id(), [si.Line(si.PenColor.BLACK, si.Pen.FINELINER_2,
-                                                  [si.Point(x, 1500, 0, 0, 12, 100) for x in range(-400, 401, 40)], 1.0, 0.0)])
-    zl = page.zotero_layer_id()
-    page.add(zl, [
-        si.Line(si.PenColor.RED, si.Pen.FINELINER_2, [si.Point(x, y, 0, 0, 12, 100) for x, y in [(-300, 600), (300, 600), (300, 900), (-300, 900), (-300, 600)]], 1.0, 0.0, color_rgba=(255, 102, 102, 255)),
-        si.GlyphRange(None, 11, "Highlighted", si.PenColor.HIGHLIGHT, [si.Rectangle(*hl_rect)], color_rgba=(166, 230, 120, 255)),
-    ])
-    doc_id = existing[0].id if existing else str(uuid.uuid4())
-    tree.stage(doc_id, metadata=new_metadata(CHECK_DOC_NAME, ""), content=content, files={".pdf": pdf, f"/{pid}.rm": page.to_bytes()})
-    tree.commit()
-    print(f"Uploaded '{CHECK_DOC_NAME}' to the top level of your tablet.")
-    print("On the tablet: open it. Page 1 should show a black line (your layer), a red box and a green highlight (layer 'Zotero').")
-    print("Draw something on page 1, wait for it to sync, then run: rmzotero check-tablet --verify")
-    return 0
+    # --verify
+    before = json.loads(state_file.read_text()) if state_file.exists() else {}
+    if entry is None:
+        print("✗ Page 1 has no writing at all on rmfakecloud. Did the tablet sync?")
+        return 1
+    page = Page.parse(tree.read(entry))
+    zs, zh, mine = summarise(page)
+    print(f"Page 1 layers: {[label for _, label in page.layers()]}")
+    print(f"Zotero layer: {zs} box + {zh} highlight (expected 1 and 1)")
+    print(f"Your writing: {mine} items (was {before.get('mine', '?')} before the Zotero layer was added)")
+    if before.get("page") and before["page"] != pid:
+        print("✗ The tablet replaced the page the Zotero layer was written to.")
+        return 1
+    ok = zs == 1 and zh == 1 and mine > int(before.get("mine", 0))
+    if ok:
+        print("✓ The tablet kept the service's Zotero layer and your writing on the same page.")
+    elif zs == 1 and zh == 1:
+        print("… The Zotero layer survived, but your newer writing hasn't arrived yet. Let the tablet sync and run --verify again.")
+    else:
+        print("✗ The Zotero layer was lost; please share this output.")
+    return 0 if ok else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -229,7 +257,8 @@ def main(argv: list[str] | None = None) -> int:
     cz.add_argument("--attachment", help="PDF attachment key to annotate (default: the first PDF found)")
     cz.add_argument("--cleanup", action="store_true", help="delete the check annotations")
     ct = sub.add_parser("check-tablet", help="check that the tablet accepts pages written by the service")
-    ct.add_argument("--verify", action="store_true", help="verify after drawing on the check document")
+    ct.add_argument("--annotate", action="store_true", help="step 2: add a Zotero layer to the page you drew on")
+    ct.add_argument("--verify", action="store_true", help="step 3: confirm the Zotero layer and your writing survived")
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     if not args.verbose:

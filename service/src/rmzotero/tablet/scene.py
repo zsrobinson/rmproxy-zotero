@@ -100,6 +100,14 @@ class Page:
         ]
         return cls(blocks)
 
+    @staticmethod
+    def roundtrips(data: bytes) -> bool:
+        """True if parsing and re-writing ``data`` reproduces it exactly (safe to edit)."""
+        try:
+            return Page.parse(data).to_bytes() == data
+        except Exception:
+            return False
+
     def to_bytes(self) -> bytes:
         buf = io.BytesIO()
         write_blocks(buf, self.blocks, options={"version": "3.6"})

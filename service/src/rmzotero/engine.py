@@ -380,10 +380,11 @@ class Engine:
             self.tree.stage(doc_id, metadata=new_metadata(want.name, parent, DOCUMENT), content=content, files={".epub": data})
             mapping = []
         else:
-            n = edit.page_count(data)
-            content = tc.new_pdf_content(n)
+            # No page list: the tablet makes its own the first time the document is opened, and
+            # ignores one supplied by us (verified on a reMarkable 2; assumption A11 was false).
+            content = tc.upload_content(edit.page_count(data))
             self.tree.stage(doc_id, metadata=new_metadata(want.name, parent, DOCUMENT), content=content, files={".pdf": data})
-            mapping = [p.id for p in tc.pages(content)]
+            mapping = None
         fhash = self.cache.put(data)
         self.state.update_doc(
             want.att_key, doc_id=doc_id, item_key=want.item_key, kind=want.kind, state="active", folder_key=want.folder,
@@ -507,7 +508,14 @@ class Engine:
             _fn, zfile = self.files.get(att_key)
         old_zfile = self.cache.get_local(row["zotero_file_hash"] or "") if row["zotero_file_hash"] else None
 
-        content = tc.ensure_cpages(doc.content, edit.page_count(self.tree.read(doc.file(".pdf"))) if doc.file(".pdf") else 0)
+        content = doc.content
+        if not tc.all_pages(content):
+            # Not opened on the tablet yet: its page list (and page ids) don't exist until then.
+            # Nothing to reconcile; Zotero annotations are drawn once the tablet has opened it.
+            sig = self._zotero_sig(att_key)
+            self.state.update_doc(att_key, tablet_doc_hash=doc.hash, tablet_seen_hash=doc.hash,
+                                  zlib_version=sig, zotero_seen_sig=sig, last_synced=self.clock())
+            return
         tablet_pages = tc.pages(content)
         page_entries = doc.page_entries()
         last_hashes = json.loads(row["page_hashes"] or "{}")
@@ -587,6 +595,11 @@ class Engine:
         # ---- tablet commit (per document) ----
         for pid, ctx in pages.items():
             if ctx.dirty:
+                e = page_entries.get(pid)
+                if e is not None and not Page.roundtrips(self.tree.read(e)):
+                    # never rewrite a tablet page we can't reproduce byte for byte: its writing could be lost
+                    self.state.event("warning", "A tablet page uses a format the service can't safely edit, so Zotero annotations weren't added to it.", att_key)
+                    continue
                 tablet_files[f"/{pid}.rm"] = ctx.page.to_bytes()
         content_changed = new_content is not content or new_content != doc.content
         if tablet_files or content_changed:

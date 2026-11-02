@@ -47,6 +47,17 @@ class Tablet:
         self.sync()
         return next(d for d in self.tree.docs.values() if d.name == name)
 
+    def open(self, name):
+        """Open a document the way the tablet does the first time: it creates its own page list."""
+        doc = self.doc_named(name)
+        if tc.all_pages(doc.content):
+            return doc
+        n = doc.content.get("pageCount") or 1
+        own = tc.new_pdf_content(n)["cPages"]  # fresh page ids, chosen by the tablet
+        self.tree.stage(doc.id, content={**doc.content, "cPages": own})
+        self.tree.commit()
+        return self.doc_named(name)
+
     def folder_path(self, doc):
         return self.tree.path_of(doc.id)
 
@@ -123,6 +134,13 @@ def test_full_round_trip(world):
     assert tablet.folder_path(doc) == ["Zotero", "ML", "Transformers"]
     pointer = tablet.doc_named("→ Vaswani - 2017 - Attention")
     assert tablet.folder_path(pointer) == ["Zotero", "Zoology"]
+    # nothing is drawn until the tablet has opened the document and chosen its page ids
+    assert tc.all_pages(doc.content) == []
+    doc = tablet.open("Vaswani - 2017 - Attention")
+    eng.sync()  # notices the first open
+    clock.advance(500)
+    assert not eng.sync().errors
+    doc = tablet.doc_named("Vaswani - 2017 - Attention")
     pages = tc.pages(doc.content)
     assert len(pages) == 3
     marks = tablet.page(doc, pages[0].id).marks()
@@ -206,7 +224,10 @@ def test_conflicting_tablet_commit_is_retried(world):
     z, files, cloud, clock, eng, tablet = world
     item, att = add_paper(z, files, [])
     eng.sync()
-    doc = tablet.doc_named("Vaswani - 2017 - Attention")
+    doc = tablet.open("Vaswani - 2017 - Attention")
+    eng.sync()
+    clock.advance(500)
+    eng.sync()
     pid = tc.pages(doc.content)[0].id
     # Zotero adds an annotation while the tablet writes on the same page; the service only sees the old tablet state
     z.add_item(highlight_of_first_word(att))
@@ -266,6 +287,7 @@ def test_epub_becomes_a_tablet_edition_and_typography_change_respects_markup(wor
     assert edit.page_boxes(tablet.tree.read(doc.file(".pdf")))[0].width == pytest.approx(447.28, abs=0.5)
 
     # write in the book, then change the font: the marked-up edition is kept, a new one is made
+    doc = tablet.open("Lovelace - A Test Novel")
     pid = tc.pages(doc.content)[1].id
     tablet.draw(doc, pid, [(0, 400), (50, 450)])
     eng.sync()

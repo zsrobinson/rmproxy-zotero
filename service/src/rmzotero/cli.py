@@ -146,18 +146,46 @@ def cmd_check_tablet(cfg: Config, args) -> int:
             print("No check document on the tablet; run check-tablet first.")
             return 2
         doc = existing[0]
-        pid = tc.pages(doc.content)[0].id
-        e = doc.page_entries().get(pid)
-        page = Page.parse(tree.read(e))
-        layers = [label for _, label in page.layers()]
-        marks = page.marks()
-        z = [m for m in marks if m.on_zotero_layer]
-        u = [m for m in marks if not m.on_zotero_layer]
-        print(f"Layers: {layers}")
-        print(f"Zotero layer: {sum(m.is_stroke for m in z)} strokes, {sum(m.is_highlight for m in z)} highlights (expected 1 and 1)")
-        print(f"Your layers: {len(u)} items (expected 2 or more if you drew on page 1)")
-        ok = "Zotero" in layers and sum(m.is_stroke for m in z) == 1 and sum(m.is_highlight for m in z) == 1 and len(u) >= 2
-        print("✓ The tablet kept the service's page and your writing." if ok else "✗ Something was lost; please report the output above.")
+        import datetime as _dt
+
+        def when(ms):
+            try:
+                return _dt.datetime.fromtimestamp(int(ms) / 1000).isoformat(timespec="seconds") if ms else "never"
+            except ValueError:
+                return str(ms)
+
+        print(f"Document: last modified {when(doc.metadata.get('lastModified'))}, last opened {when(doc.metadata.get('lastOpened'))}")
+        listed = tc.all_pages(doc.content)
+        files = doc.page_entries()
+        print(f"Page list: {len(listed)} pages ({sum(1 for p in listed if p.deleted)} deleted); page files: {len(files)}")
+        unlisted = [pid for pid in files if pid not in {p.id for p in listed}]
+        if unlisted:
+            print(f"  page files not in the page list: {len(unlisted)} (the tablet may have re-numbered pages)")
+        zotero_ok = False
+        user_items = 0
+        for i, pid in enumerate([p.id for p in listed] + unlisted):
+            e = files.get(pid)
+            if e is None:
+                print(f"  page {i + 1}: no writing")
+                continue
+            page = Page.parse(tree.read(e))
+            marks = page.marks()
+            z = [m for m in marks if m.on_zotero_layer]
+            u = [m for m in marks if not m.on_zotero_layer]
+            print(f"  page {i + 1}: layers {[label for _, label in page.layers()]}; Zotero layer {sum(m.is_stroke for m in z)} strokes + "
+                  f"{sum(m.is_highlight for m in z)} highlights; your layers {len(u)} items")
+            if sum(m.is_stroke for m in z) == 1 and sum(m.is_highlight for m in z) == 1:
+                zotero_ok = True
+            user_items += len(u)
+        print(f"Service's Zotero layer intact: {'yes' if zotero_ok else 'NO'}")
+        print(f"Your writing found: {'yes' if user_items >= 2 else 'not yet'} ({user_items} items on your layers; the service drew 1)")
+        ok = zotero_ok and user_items >= 2
+        if ok:
+            print("✓ The tablet kept the service's page and your writing.")
+        elif zotero_ok:
+            print("… The service's page survived, but your drawing hasn't arrived. Check the tablet has synced (no pending-sync icon), then run this again.")
+        else:
+            print("✗ The service's layer was lost; please share the output above.")
         return 0 if ok else 1
     pdf = text_pdf([[("rmzotero tablet check", 20), ("Highlighted text written by the service sits on this line.", 12),
                      ("Draw anything on this page, let the tablet sync, then run: rmzotero check-tablet --verify", 11)],
@@ -204,6 +232,9 @@ def main(argv: list[str] | None = None) -> int:
     ct.add_argument("--verify", action="store_true", help="verify after drawing on the check document")
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if not args.verbose:
+        for noisy in ("httpx", "httpcore", "pikepdf"):
+            logging.getLogger(noisy).setLevel(logging.WARNING)
     try:
         cfg = Config.load(args.config)
         cfg.data_dir.mkdir(parents=True, exist_ok=True)

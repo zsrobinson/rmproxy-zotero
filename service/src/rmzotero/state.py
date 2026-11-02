@@ -50,6 +50,11 @@ CREATE TABLE IF NOT EXISTS folders (fkey TEXT PRIMARY KEY, doc_id TEXT);
 CREATE TABLE IF NOT EXISTS home_overrides (item_key TEXT PRIMARY KEY, collection_key TEXT);
 CREATE TABLE IF NOT EXISTS derived (source_key TEXT, kind TEXT, derived_key TEXT, params TEXT, PRIMARY KEY (source_key, kind));
 CREATE TABLE IF NOT EXISTS typography (att_key TEXT PRIMARY KEY, params TEXT);
+CREATE TABLE IF NOT EXISTS cycles (id INTEGER PRIMARY KEY AUTOINCREMENT, started REAL, finished REAL, report TEXT);
+CREATE TABLE IF NOT EXISTS failures (
+  key TEXT, kind TEXT, fingerprint TEXT, attempts INTEGER, first_ts REAL, last_ts REAL, next_retry REAL,
+  message TEXT, traceback TEXT, PRIMARY KEY (key, kind)
+);
 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, level TEXT, att_key TEXT, message TEXT);
 """
 

@@ -307,6 +307,31 @@ def cmd_debug_page(cfg: Config, args) -> int:
     return 0
 
 
+def cmd_diagnostics(cfg: Config, args) -> int:
+    """Ask the running service for its diagnostics; fall back to what's stored if it isn't running."""
+    import httpx
+
+    from .diagnostics import Failures, format_text
+
+    _host, _, port = cfg.api_listen.rpartition(":")
+    data = None
+    try:
+        r = httpx.get(f"http://127.0.0.1:{port}/api/diagnostics", headers={"Authorization": f"Bearer {cfg.api_token}"}, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        print(f"(the service isn't answering on port {port}: {e}; showing what it last stored)", file=sys.stderr)
+    if data is None:
+        state = State(cfg.data_dir / "state.db")
+        cycles = [json.loads(r["report"]) for r in state.all("SELECT report FROM cycles ORDER BY id DESC LIMIT 20")]
+        data = {"stored_only": True, "last_report": state.get("last_report"), "recent_cycles": cycles,
+                "failures": Failures(state).all(), "recent_events": state.events(limit=30)}
+        print(json.dumps(data, indent=1, default=str))
+        return 1
+    print(json.dumps(data, indent=1, default=str) if args.json else format_text(data))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="rmzotero", description="Sync a Zotero library with a reMarkable tablet via rmfakecloud.")
     p.add_argument("--config", default=os.environ.get("RMZOTERO_CONFIG", "/config/rmzotero.toml"))
@@ -322,6 +347,8 @@ def main(argv: list[str] | None = None) -> int:
     ct = sub.add_parser("check-tablet", help="check that the tablet accepts pages written by the service")
     ct.add_argument("--annotate", action="store_true", help="step 2: add a Zotero layer to the page you drew on")
     ct.add_argument("--verify", action="store_true", help="step 3: confirm the Zotero layer and your writing survived")
+    dg = sub.add_parser("diagnostics", help="what the running service is doing, timings and failures")
+    dg.add_argument("--json", action="store_true", help="the full report as JSON")
     dp = sub.add_parser("debug-page", help="print the structure of a tablet page (for troubleshooting)")
     dp.add_argument("document", help="the document's name on the tablet")
     dp.add_argument("--page", type=int, default=1)
@@ -351,7 +378,7 @@ def main(argv: list[str] | None = None) -> int:
               "in the container's environment to the owner of those files.", file=sys.stderr)
         return 2
     return {"run": cmd_run, "sync-once": cmd_sync_once, "register": cmd_register,
-            "check-zotero": cmd_check_zotero, "check-tablet": cmd_check_tablet, "debug-page": cmd_debug_page}[args.cmd](cfg, args)
+            "check-zotero": cmd_check_zotero, "check-tablet": cmd_check_tablet, "debug-page": cmd_debug_page, "diagnostics": cmd_diagnostics}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":

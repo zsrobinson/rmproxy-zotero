@@ -134,3 +134,13 @@ def test_debug_page(tmp_path, monkeypatch, capsys):
     cli.main(["--config", str(conf), "check-tablet"])
     assert cli.main(["--config", str(conf), "debug-page", "rmzotero check"]) == 2  # never opened: no page list
     assert "formatVersion" in capsys.readouterr().out
+
+
+def test_diagnostics_command_falls_back_when_service_is_down(tmp_path, capsys):
+    from rmzotero import cli
+
+    conf = tmp_path / "c.toml"
+    conf.write_text(f'data_dir = "{tmp_path / "data"}"\n[api]\nlisten = "127.0.0.1:1"\ntoken = "x"\n')
+    assert cli.main(["--config", str(conf), "diagnostics"]) == 1
+    out = capsys.readouterr()
+    assert "isn't answering" in out.err and '"stored_only": true' in out.out

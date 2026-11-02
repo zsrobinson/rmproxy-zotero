@@ -29,6 +29,7 @@ class Api:
         r = self._route
         r("GET", r"/api/health", self.health, auth=False)
         r("GET", r"/api/status", self.status)
+        r("GET", r"/api/diagnostics", self.diagnostics)
         r("GET", r"/api/settings", self.get_settings)
         r("PUT", r"/api/settings", self.put_settings)
         r("GET", r"/api/collections", self.collections)
@@ -82,6 +83,11 @@ class Api:
             "events": st.events(limit=30),
             "zotero_library_version": self.engine.lib.version,
         }
+
+    def diagnostics(self, _):
+        from .diagnostics import collect
+
+        return collect(self.engine)
 
     def get_settings(self, _):
         return self.engine.settings.as_dict()

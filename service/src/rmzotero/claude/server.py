@@ -51,6 +51,13 @@ def build(ops: LibraryOps, secret: str) -> FastMCP:
             raise ValueError(str(e)) from e
 
     @mcp.tool(annotations=READ)
+    async def service_diagnostics() -> str:
+        """How the sync service itself is doing: what it's working on now, how long recent sync cycles and their
+        steps took, queued conversions, documents waiting to sync, recent errors and failures (with tracebacks),
+        and counts. Use this when the user reports something slow, stuck or broken."""
+        return _json(await call(ops.diagnostics))
+
+    @mcp.tool(annotations=READ)
     async def search_library(query: str, collection: str | None = None, limit: int = 20) -> str:
         """Find items by words in their title, authors, year, publication, DOI, tags, abstract, or in the text and
         comments of their annotations. Optionally only within a collection (key) and its subcollections."""

@@ -72,6 +72,13 @@ export interface Status {
   events: ServiceEvent[];
 }
 
+export interface Diagnostics {
+  activity: { doing: string; for_s: number };
+  last_cycle: { seconds: number } | null;
+  failures: { item: string; kind: string; error: string; next_retry_in_s: number }[];
+  queue: { conversions_pending?: number; documents_not_yet_opened_on_tablet?: number };
+}
+
 export type Requester = (
   method: string,
   url: string,
@@ -125,6 +132,9 @@ export class ServiceClient {
 
   health() {
     return this.call<{ ok: boolean; version: string }>("GET", "/api/health");
+  }
+  diagnostics() {
+    return this.call<Diagnostics>("GET", "/api/diagnostics");
   }
   status() {
     return this.call<Status>("GET", "/api/status");

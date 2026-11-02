@@ -12,6 +12,7 @@
       <html:button id="rmz-sync">Sync now</html:button>
     </hbox>
     <html:div id="rmz-status" style="margin-top:6px"/>
+    <html:div id="rmz-activity" style="margin-top:4px;color:var(--fill-secondary,#666)"/>
   </groupbox>
 
   <vbox id="rmz-settings" hidden="true">
@@ -52,6 +53,7 @@
     <groupbox>
       <label><html:h2>Recent activity</html:h2></label>
       <html:pre id="rmz-events" style="white-space:pre-wrap;font:inherit"/>
+      <html:pre id="rmz-failures" style="white-space:pre-wrap;font:inherit;color:#c0392b"/>
     </groupbox>
   </vbox>
 </vbox>

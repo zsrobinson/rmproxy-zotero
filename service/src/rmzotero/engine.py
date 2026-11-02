@@ -21,6 +21,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from . import planner
+from .diagnostics import Activity, Failures, format_traceback, record_cycle
 from .annotations import convert as cv
 from .annotations.reconcile import Link, PageCtx, reconcile
 from .config import Config, Settings, load_settings
@@ -74,6 +75,9 @@ class Report:
     derived: int = 0
     pending: int = 0  # documents waiting for their quiet period
     paused: bool = False
+    backed_off: int = 0  # items skipped because they failed recently (see diagnostics.Failures)
+    phases: dict = field(default_factory=dict)  # seconds spent per step
+    slowest: list = field(default_factory=list)  # [(document, seconds)] slowest document syncs
     errors: list[str] = field(default_factory=list)
     next_due: float | None = None
 
@@ -105,6 +109,9 @@ class Engine:
         self.lock = threading.RLock()
         self.last_report = Report()
         self.wakeup = threading.Event()
+        self.started_at = clock()
+        self.activity = Activity(clock)
+        self.failures = Failures(state, clock)
 
     # ------------------------------------------------------------------------------------------
     @property
@@ -114,33 +121,48 @@ class Engine:
     def sync(self) -> Report:
         with self.lock:
             rep = Report(started=self.clock())
+            self.activity.phases = {}
             try:
-                self._cycle(rep)
+                with self.activity.doing("sync cycle"):
+                    self._cycle(rep)
             except Exception as e:  # keep the service alive; report the failure
                 log.exception("sync cycle failed")
                 msg = explain(e)
                 rep.errors.append(msg)
                 self.state.event("error", f"Sync failed: {msg}")
             rep.finished = self.clock()
+            rep.phases = {k: round(v, 3) for k, v in self.activity.phases.items() if k != "sync cycle"}
+            rep.slowest = sorted(rep.slowest, key=lambda x: -x[1])[:10]
             self.last_report = rep
             self.state.set("last_report", rep.as_dict())
+            try:
+                record_cycle(self.state, rep.as_dict())
+            except Exception:
+                log.exception("couldn't record the cycle")
             return rep
 
     def _cycle(self, rep: Report) -> None:
         settings = self.settings
-        changed_keys = self.lib.refresh(self.zotero)
+        doing = self.activity.doing
+        with doing("zotero refresh"):
+            changed_keys = self.lib.refresh(self.zotero)
         if settings.paused:
             # read-only: keep the library mirror fresh for the plugin, change nothing anywhere
             rep.paused = True
             return
-        self.tree.mirror()
-        self._observe(changed_keys)
-        rep.derived = self._derive(settings)
-        plan = planner.plan(self.lib, settings, self.state)
-        self._apply_removals(rep)
-        self._detect_tablet_removals(rep)
-        new_docs = self._organise(plan, settings, rep)
-        dropped = self.tree.commit()
+        with doing("tablet refresh"):
+            self.tree.mirror()
+            self._observe(changed_keys)
+        with doing("conversions"):
+            rep.derived = self._derive(settings, rep)
+        with doing("planning"):
+            plan = planner.plan(self.lib, settings, self.state)
+        with doing("removals"):
+            self._apply_removals(rep)
+            self._detect_tablet_removals(rep)
+        with doing("organising and uploads"):
+            new_docs = self._organise(plan, settings, rep)
+            dropped = self.tree.commit()
         for doc_id in dropped:
             self._note_dropped(doc_id)
         needs_drawing: set[str] = set()
@@ -155,10 +177,13 @@ class Engine:
                     sig = self._zotero_sig(att_key)
                     fields.update(zlib_version=sig, zotero_seen_sig=sig, last_synced=self.clock())
                 self.state.update_doc(att_key, **fields)
-        self._sync_contents(plan, rep, force=needs_drawing)
-        self._retire(plan, rep)
-        self._archive(settings, rep)
-        self._storage_check(settings)
+        with doing("annotation sync"):
+            self._sync_contents(plan, rep, force=needs_drawing)
+        with doing("retiring"):
+            self._retire(plan, rep)
+        with doing("archiving"):
+            self._archive(settings, rep)
+            self._storage_check(settings)
 
     # -- observation ------------------------------------------------------------------------------
     def _zotero_sig(self, att_key: str) -> int:
@@ -193,7 +218,12 @@ class Engine:
 
         return EpubDefaults(**base)
 
-    def _derive(self, settings: Settings) -> int:
+    def _derivation_fingerprint(self, source_key: str, kind: str, settings: Settings) -> str:
+        att = self.lib.items.get(source_key) or {}
+        extra = rend.params_hash(self._typography(source_key, settings)) if kind == "rendition" else ""
+        return f"{att.get('md5') or att.get('version')}|{extra}"
+
+    def _derive(self, settings: Settings, rep: Report | None = None) -> int:
         plan = planner.plan(self.lib, settings, self.state)
         pending = list(plan.pending)
         # renditions whose typography changed
@@ -202,18 +232,32 @@ class Engine:
             if r["source_key"] in self.lib.items and params.get("typography") != rend.params_hash(self._typography(r["source_key"], settings)):
                 pending.append(planner.Derivation(r["source_key"], "rendition"))
         done = 0
+        ready = []
+        for d in pending:
+            if self.failures.blocked(d.source_key, d.kind, self._derivation_fingerprint(d.source_key, d.kind, settings)):
+                if rep is not None:
+                    rep.backed_off += 1
+            else:
+                ready.append(d)
+        pending = ready
         for d in pending[:MAX_DERIVATIONS_PER_CYCLE]:
+            title = (self.lib.items.get(d.source_key) or {}).get("title") or d.source_key
+            fp = self._derivation_fingerprint(d.source_key, d.kind, settings)
             try:
-                if d.kind == "rendition":
-                    self._make_rendition(d.source_key, settings)
-                else:
-                    self._check_ocr(d.source_key)
+                with self.activity.doing("conversions", f"{'typesetting EPUB' if d.kind == 'rendition' else 'checking for scanned pages'}: {title}"):
+                    if d.kind == "rendition":
+                        self._make_rendition(d.source_key, settings)
+                    else:
+                        self._check_ocr(d.source_key)
                 done += 1
-            except FileMissing:
-                self.state.event("warning", "The file isn't on the WebDAV share yet; will retry.", d.source_key)
+                self.failures.clear(d.source_key, d.kind)
+            except FileMissing as e:
+                delay = self.failures.record(d.source_key, d.kind, fp, "The file isn't on the WebDAV share yet", format_traceback(e))
+                self.state.event("warning", f"The file isn't on the WebDAV share yet; retrying in {int(delay // 60)} min.", d.source_key)
             except Exception as e:
                 log.exception("derivation failed for %s", d.source_key)
-                self.state.event("error", f"Couldn't prepare this file: {e}", d.source_key)
+                delay = self.failures.record(d.source_key, d.kind, fp, str(e), format_traceback(e))
+                self.state.event("error", f"Couldn't prepare this file: {e} (retrying in {int(delay // 60)} min, or when it changes)", d.source_key)
         if len(pending) > MAX_DERIVATIONS_PER_CYCLE:
             self.wakeup.set()
         if done:
@@ -344,13 +388,17 @@ class Engine:
             parent = self._folder_doc(want.folder)
             if row is None:
                 try:
-                    self._upload(want, parent)
+                    with self.activity.doing("organising and uploads", f"uploading {want.name}"):
+                        self._upload(want, parent)
                     new_docs.append(att_key)
                     rep.uploaded += 1
-                except FileMissing:
-                    self.state.event("warning", "The file isn't on the WebDAV share yet; will retry.", att_key)
+                    self.failures.clear(att_key, "upload")
+                except FileMissing as e:
+                    self.failures.record(att_key, "upload", str(self.lib.items.get(att_key, {}).get("md5")), "The file isn't on the WebDAV share yet", format_traceback(e))
+                    self.state.update_doc(att_key, state="error", error="The file isn't on the WebDAV share yet")
                 except Exception as e:
                     log.exception("upload failed for %s", att_key)
+                    self.failures.record(att_key, "upload", str(self.lib.items.get(att_key, {}).get("md5")), str(e), format_traceback(e))
                     self.state.update_doc(att_key, state="error", error=str(e)[:300])
                     rep.errors.append(f"{want.name}: {e}")
                 continue
@@ -359,6 +407,9 @@ class Engine:
                 continue
             if st in ("trashed", "removed", "error") or row["restore_requested"]:
                 if st == "error":
+                    if self.failures.blocked(att_key, "upload", str(self.lib.items.get(att_key, {}).get("md5"))):
+                        rep.backed_off += 1
+                        continue
                     self.state.exec("DELETE FROM docs WHERE att_key=?", (att_key,))
                     continue  # retried as a fresh upload next cycle
                 self._restore(row, want, parent)
@@ -491,14 +542,23 @@ class Engine:
                 next_due = due if next_due is None else min(next_due, due)
                 rep.pending += 1
                 continue
+            fp = f"{doc.hash}|{self._zotero_sig(row['att_key'])}"
+            if self.failures.blocked(row["att_key"], "sync", fp):
+                rep.backed_off += 1
+                continue
+            started = time.perf_counter()
             try:
-                self._sync_doc(row, force=False, rep=rep)
+                with self.activity.doing("annotation sync", row["name"]):
+                    self._sync_doc(row, force=False, rep=rep)
                 rep.synced_docs += 1
+                self.failures.clear(row["att_key"], "sync")
             except Exception as e:
                 log.exception("sync failed for %s", row["att_key"])
+                delay = self.failures.record(row["att_key"], "sync", fp, str(e), format_traceback(e))
                 self.state.update_doc(row["att_key"], error=str(e)[:300])
-                self.state.event("error", f"Sync failed: {e}", row["att_key"])
+                self.state.event("error", f"Sync failed: {e} (retrying in {int(delay // 60)} min, or when it changes)", row["att_key"])
                 rep.errors.append(f"{row['name']}: {e}")
+            rep.slowest.append((row["name"], round(time.perf_counter() - started, 3)))
         rep.next_due = next_due
 
     def _sync_doc(self, row, *, force: bool, rep: Report) -> None:

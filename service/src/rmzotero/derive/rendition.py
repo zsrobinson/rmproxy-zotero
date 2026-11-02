@@ -150,13 +150,20 @@ def render_epub(data: bytes, typography: EpubDefaults, *, pandoc: str = "pandoc"
 
 
 def _clean_typst(body: str, cover_name: str | None = None) -> str:
-    """Make pandoc's EPUB output compile: EPUB anchors aren't valid Typst labels."""
+    """Make pandoc's EPUB output compile: EPUB anchors aren't valid Typst labels.
+
+    Order matters: links and references *to* anchors are rewritten first, then the anchors
+    themselves are removed (removing them first left ``#link()`` with no target).
+    """
+    # internal links to anchors: keep the link text
+    body = re.sub(r"#link\(\s*<[^<>]*>\s*\)", "#box", body)
+    # references to anchors (e.g. figure/footnote cross-references): drop them
+    body = re.sub(r"#ref\(\s*<[^<>]*>\s*\)", "", body)
+    body = re.sub(r"@[A-Za-z0-9_.:\-]*\.x?html[#A-Za-z0-9_.:\-]*", "", body)
     # standalone anchor labels like <ch001.xhtml#intro> (we don't keep cross-references)
     body = re.sub(r"(?m)^[ \t]*<[^<>\n]*>[ \t]*$", "", body)
     # inline labels after headings etc.
     body = re.sub(r"<[^<>\s]*[#/.][^<>\s]*>", "", body)
-    # internal links to those anchors: keep the link text
-    body = re.sub(r"#link\(<[^>]*>\)", "#box", body)
     # empty wrappers left behind by EPUB anchors would otherwise produce blank pages
     body = re.sub(r"#block\[\s*\]", "", body)
     # EPUB footnotes often start with the back-reference's leftover punctuation

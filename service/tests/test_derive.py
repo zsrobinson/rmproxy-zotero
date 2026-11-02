@@ -74,3 +74,11 @@ def test_ocr_adds_text_only_where_missing():
     assert "".join(c.text for c in tl.chars(0)).startswith("Original born-digital")
     assert "class" in "".join(c.text for c in tl.chars(1)).lower()
     assert edit.page_fingerprints(result)[0] == edit.page_fingerprints(src)[0]  # untouched page
+
+
+@pytest.mark.skipif(not shutil.which("pandoc"), reason="pandoc not installed")
+def test_rendition_with_internal_links():
+    # real EPUBs link to their own anchors (contents pages, back-references); these broke typesetting
+    pdf = render_epub(make_epub(internal_links=True), EpubDefaults())
+    tl = TextLayer(pdf)
+    assert "the first chapter" in "".join(c.text for i in range(len(tl)) for c in tl.chars(i))

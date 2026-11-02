@@ -261,6 +261,11 @@ class LibraryOps:
                 out.append({**self._summary(it), "annotations": entries})
         return {"items": out}
 
+    def diagnostics(self) -> dict:
+        from ..diagnostics import collect
+
+        return collect(self.engine)
+
     @_retry_reads
     def read_pages(self, key: str, pages: str | None = None) -> dict:
         att = self._attachment_for(key)

@@ -1,6 +1,6 @@
 {
   "name": "rmzotero-plugin",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Zotero plugin for rmzotero: reMarkable status, controls and settings inside Zotero",
   "scripts": {

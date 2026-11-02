@@ -102,6 +102,15 @@ async function load(): Promise<void> {
     fillSelect("rmz-margins", MARGINS.map((v) => [String(v), String(v)]), String(s.epub.margins));
     fillSelect("rmz-align", [["justify", "Justified"], ["left", "Left"]], s.epub.alignment);
     $("rmz-events").textContent = status.events.slice(0, 8).map((e) => `• ${e.message}`).join("\n");
+    void c.diagnostics().then((d) => {
+      const bits = [`Now: ${d.activity.doing}`];
+      if (d.last_cycle) bits.push(`last sync took ${Math.round(d.last_cycle.seconds)}s`);
+      if (d.queue.conversions_pending) bits.push(`${d.queue.conversions_pending} files to prepare`);
+      if (d.failures.length) bits.push(`${d.failures.length} problem${d.failures.length === 1 ? "" : "s"} waiting to retry`);
+      $("rmz-activity").textContent = bits.join(" · ");
+      $("rmz-failures").textContent = d.failures.slice(0, 8)
+        .map((f) => `• ${f.item} (${f.kind}): ${f.error.slice(0, 140)}, retry in ${Math.round(f.next_retry_in_s / 60)} min`).join("\n");
+    }).catch(() => undefined);
     $("rmz-settings").hidden = false;
     renderCollections();
     void updateProjection();

@@ -129,6 +129,16 @@ Tools: `search_library`, `get_item`, `list_collections`, `get_annotations`, `rea
 
 The URL is the password: keep it private, and change the secret to revoke access.
 
+## When something seems slow or stuck
+
+The service keeps a record of what it's doing: per-step timings for recent sync cycles, what's queued, and
+anything that failed (with its error and when it will be retried; failures back off from 5 minutes up to a day,
+or retry immediately when the file or settings change). Three ways to see it:
+
+- **Plugin:** Zotero Settings → reMarkable shows what the service is doing now and any problems waiting to retry.
+- **Claude:** ask Claude (with the connector) to look; it has a `service_diagnostics` tool.
+- **SSH:** `sudo docker compose exec rmzotero rmzotero diagnostics` (add `--json` for the full report).
+
 ## What isn't synced (by design, for now)
 
 - **Comments** on highlights and Zotero **notes** stay in Zotero (ADR 0008).

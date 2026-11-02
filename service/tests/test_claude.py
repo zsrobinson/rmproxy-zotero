@@ -161,10 +161,14 @@ def test_mcp_protocol_end_to_end(lib_world):
                     assert "reMarkable" in (init.instructions or "")
                     tools = {t.name: t for t in (await s.list_tools()).tools}
                     assert set(tools) == {"search_library", "get_item", "list_collections", "get_annotations", "read_pages", "view_pages",
-                                          "add_items", "create_collection", "file_items", "add_note", "edit_item"}
+                                          "add_items", "create_collection", "file_items", "add_note", "edit_item", "service_diagnostics"}
                     assert tools["search_library"].annotations.readOnlyHint is True
                     assert tools["add_items"].annotations.readOnlyHint is False
                     assert tools["file_items"].annotations.destructiveHint is True
+                    assert tools["service_diagnostics"].annotations.readOnlyHint is True
+                    r = await s.call_tool("service_diagnostics", {})
+                    diag = json.loads(r.content[0].text)
+                    assert "activity" in diag and "failures" in diag and "recent_cycles" in diag
                     r = await s.call_tool("search_library", {"query": "attention"})
                     assert json.loads(r.content[0].text)["items"][0]["key"] == item
                     r = await s.call_tool("view_pages", {"key": item, "pages": "1"})

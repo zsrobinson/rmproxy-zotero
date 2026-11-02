@@ -1,0 +1,3 @@
+# Zotero owns organisation; the tablet mirrors it
+
+Only annotations sync both ways. Folders, document names and placement on the tablet are derived from Zotero collections under a user-chosen sync root, and moves or renames made on the tablet are reverted on the next sync. Deleting a document on the tablet marks the item "removed on tablet" (restorable from the plugin) and never changes Zotero's collections. Documents created on the tablet are not imported. An item in several collections lives in one home collection's folder, with pointer documents in the others, because a tablet document can sit in only one folder.

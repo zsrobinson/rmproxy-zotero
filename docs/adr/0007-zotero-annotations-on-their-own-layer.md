@@ -1,0 +1,3 @@
+# Zotero-originated annotations live on a dedicated tablet layer
+
+When writing Zotero annotations onto a tablet page, the service puts them on a dedicated "Zotero" layer instead of the user's own layers, so the user's writing is never interleaved with machine-written content. Annotations are linked one-to-one across both sides; when both sides change the same annotation between syncs the latest change wins, and deletions propagate. The service never overwrites a page that changed on the tablet since it last read it: it re-reads, merges and retries, so the user's strokes cannot be silently lost.

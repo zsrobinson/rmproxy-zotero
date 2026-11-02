@@ -327,8 +327,10 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     if not args.verbose:
-        for noisy in ("httpx", "httpcore", "pikepdf", "rmscene"):
+        for noisy in ("httpx", "httpcore", "pikepdf"):
             logging.getLogger(noisy).setLevel(logging.WARNING)
+        # rmscene warns about newer tablet blocks it reads only partly; they're preserved and harmless here
+        logging.getLogger("rmscene").setLevel(logging.ERROR)
     try:
         cfg = Config.load(args.config)
         cfg.data_dir.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,105 @@
+"""Configuration: a TOML file for connections, plus runtime settings the plugin can change."""
+
+from __future__ import annotations
+
+import os
+import tomllib
+from dataclasses import dataclass, field, fields
+from pathlib import Path
+
+from .state import State
+
+
+@dataclass
+class EpubDefaults:
+    """Rendition typography, mirroring the tablet's own ebook options (assumption A5)."""
+
+    font: str = "EB Garamond"  # Noto Sans | Noto Sans UI | EB Garamond | Noto Mono | Noto Serif
+    text_scale: float = 1.0  # 0.7 0.8 1 1.2 1.5 2
+    line_height: int = 150  # 100 150 200
+    margins: int = 125  # 50 125 200 (tablet pixels)
+    alignment: str = "justify"  # justify | left
+
+    def as_dict(self) -> dict:
+        return {f.name: getattr(self, f.name) for f in fields(self)}
+
+
+@dataclass
+class Settings:
+    """Settings the user can change from the plugin (persisted in the state DB)."""
+
+    sync_root: str = "Zotero"
+    excluded_collections: list[str] = field(default_factory=list)
+    pointers: str = "unrelated"  # all | none | unrelated
+    ocr: bool = True
+    archive_after_days: int = 0  # 0 = never archive
+    tablet_capacity_gb: float = 8.0
+    filename_template: str = ""
+    epub: EpubDefaults = field(default_factory=EpubDefaults)
+
+    def as_dict(self) -> dict:
+        d = {f.name: getattr(self, f.name) for f in fields(self) if f.name != "epub"}
+        d["epub"] = self.epub.as_dict()
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict, base: "Settings | None" = None) -> "Settings":
+        s = base or cls()
+        out = cls(**{f.name: getattr(s, f.name) for f in fields(cls)})
+        for f in fields(cls):
+            if f.name == "epub" and isinstance(d.get("epub"), dict):
+                e = out.epub.as_dict()
+                e.update({k: v for k, v in d["epub"].items() if k in e})
+                out.epub = EpubDefaults(**e)
+            elif f.name in d and f.name != "epub":
+                setattr(out, f.name, d[f.name])
+        if out.pointers not in ("all", "none", "unrelated"):
+            raise ValueError("pointers must be all, none or unrelated")
+        out.sync_root = "/".join(p for p in str(out.sync_root).split("/") if p.strip())
+        return out
+
+
+@dataclass
+class Config:
+    data_dir: Path
+    zotero_user_id: int
+    zotero_api_key: str
+    webdav_url: str
+    webdav_username: str
+    webdav_password: str
+    rmfakecloud_url: str
+    api_listen: str = "0.0.0.0:8787"
+    api_token: str = ""
+    quiet_seconds: float = 120.0
+    poll_seconds: float = 900.0
+    defaults: Settings = field(default_factory=Settings)
+
+    @classmethod
+    def load(cls, path: Path | str) -> "Config":
+        with open(path, "rb") as f:
+            raw = tomllib.load(f)
+        env = os.environ.get
+        z, w, r, a, s = (raw.get(k, {}) for k in ("zotero", "webdav", "rmfakecloud", "api", "sync"))
+        defaults = Settings.from_dict({**s, "epub": raw.get("epub", {})})
+        return cls(
+            data_dir=Path(env("RMZOTERO_DATA_DIR") or raw.get("data_dir", "/data")),
+            zotero_user_id=int(env("ZOTERO_USER_ID") or z.get("user_id", 0)),
+            zotero_api_key=env("ZOTERO_API_KEY") or z.get("api_key", ""),
+            webdav_url=env("WEBDAV_URL") or w.get("url", ""),
+            webdav_username=env("WEBDAV_USERNAME") or w.get("username", ""),
+            webdav_password=env("WEBDAV_PASSWORD") or w.get("password", ""),
+            rmfakecloud_url=env("RMFAKECLOUD_URL") or r.get("url", ""),
+            api_listen=a.get("listen", "0.0.0.0:8787"),
+            api_token=env("RMZOTERO_API_TOKEN") or a.get("token", ""),
+            quiet_seconds=float(s.get("quiet_seconds", 120)),
+            poll_seconds=float(s.get("poll_seconds", 900)),
+            defaults=defaults,
+        )
+
+
+def load_settings(state: State, defaults: Settings) -> Settings:
+    return Settings.from_dict(state.get("settings", {}), defaults)
+
+
+def save_settings(state: State, settings: Settings, defaults: Settings) -> None:
+    state.set("settings", settings.as_dict())

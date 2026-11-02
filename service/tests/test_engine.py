@@ -225,3 +225,19 @@ def test_conflicting_tablet_commit_is_retried(world):
     assert sum(1 for m in marks if m.on_zotero_layer) == 1  # and the Zotero highlight arrived
     kinds = sorted(o.get("annotationType") for o in z.items() if o.get("itemType") == "annotation")
     assert kinds == ["highlight", "ink"]
+
+
+def test_first_sync_of_a_large_library_is_one_commit(world):
+    import time
+
+    z, files, cloud, clock, eng, tablet = world
+    cols = [z.add_collection(f"Course {i}") for i in range(10)]
+    for i in range(200):
+        add_paper(z, files, [cols[i % 10]], title=f"Paper {i}")
+    t = time.time()
+    rep = eng.sync()
+    assert not rep.errors and rep.uploaded == 200
+    assert cloud.root_writes == 1  # folders and all documents land in one tablet commit
+    assert time.time() - t < 30
+    clock.advance()
+    assert eng.sync().synced_docs == 0 and cloud.root_writes == 1

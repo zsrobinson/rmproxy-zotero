@@ -45,6 +45,22 @@ log = logging.getLogger(__name__)
 MAX_DERIVATIONS_PER_CYCLE = 4
 
 
+def explain(e: Exception) -> str:
+    """A message a person can act on, for the errors that are usually configuration problems."""
+    import httpx
+
+    if isinstance(e, httpx.HTTPStatusError):
+        host, code = e.request.url.host, e.response.status_code
+        if "zotero.org" in host and code == 403:
+            return "Zotero rejected the API key (check [zotero] user_id and api_key; the key needs library write access)."
+        if code in (401, 403):
+            return f"{host} refused the credentials (HTTP {code}); check the [webdav] or [rmfakecloud] settings."
+        return f"{host} answered HTTP {code}."
+    if isinstance(e, httpx.ConnectError):
+        return f"Can't connect to {e.request.url.host if e.request else 'a server'}: {e}"
+    return f"{type(e).__name__}: {e}"
+
+
 @dataclass
 class Report:
     started: float = 0.0
@@ -101,8 +117,9 @@ class Engine:
                 self._cycle(rep)
             except Exception as e:  # keep the service alive; report the failure
                 log.exception("sync cycle failed")
-                rep.errors.append(f"{type(e).__name__}: {e}")
-                self.state.event("error", f"Sync failed: {e}")
+                msg = explain(e)
+                rep.errors.append(msg)
+                self.state.event("error", f"Sync failed: {msg}")
             rep.finished = self.clock()
             self.last_report = rep
             self.state.set("last_report", rep.as_dict())
@@ -120,12 +137,19 @@ class Engine:
         dropped = self.tree.commit()
         for doc_id in dropped:
             self._note_dropped(doc_id)
+        needs_drawing: set[str] = set()
         for att_key in new_docs:
             row = self.state.doc(att_key)
             if row and row["doc_id"] not in dropped:
-                self.state.update_doc(att_key, tablet_doc_hash=self.tree.docs[row["doc_id"]].hash,
-                                      tablet_seen_hash=self.tree.docs[row["doc_id"]].hash)
-        self._sync_contents(plan, rep, force=set(new_docs))
+                h = self.tree.docs[row["doc_id"]].hash
+                fields = {"tablet_doc_hash": h, "tablet_seen_hash": h}
+                if self.lib.annotations(att_key):
+                    needs_drawing.add(att_key)  # existing Zotero annotations go onto the new document now
+                else:
+                    sig = self._zotero_sig(att_key)
+                    fields.update(zlib_version=sig, zotero_seen_sig=sig, last_synced=self.clock())
+                self.state.update_doc(att_key, **fields)
+        self._sync_contents(plan, rep, force=needs_drawing)
         self._retire(plan, rep)
         self._archive(settings, rep)
         self._storage_check(settings)

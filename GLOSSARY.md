@@ -97,5 +97,5 @@ A copy of a scanned PDF attachment with an invisible text layer added to its tex
 _Avoid_: OCR'd PDF, OCR version
 
 **Rendition**:
-A PDF generated from an EPUB attachment, laid out to match the tablet's own ebook typography, which is what the tablet actually receives and is marked up.
+A PDF generated from an EPUB attachment, laid out to match the tablet's own ebook typography, which is what the tablet actually receives and is marked up. Shown to the user as the "tablet edition".
 _Avoid_: converted PDF, export

@@ -70,6 +70,14 @@ _Avoid_: shortcut, alias, link
 The dedicated layer on a tablet page that holds annotations which originated in Zotero, kept apart from the user's own writing.
 _Avoid_: overlay
 
+**Note Page**:
+A blank page the user inserted into a document between its original pages, to write on.
+_Avoid_: inserted page, extra page
+
+**Archived**:
+A document whose contents live only in rmfakecloud; the tablet shows it greyed out until tapped, which brings it back.
+_Avoid_: offloaded, cloud-only, placeholder
+
 **Stroke**:
 One continuous pen, pencil, marker or highlighter line drawn on a tablet page.
 _Avoid_: line, scribble

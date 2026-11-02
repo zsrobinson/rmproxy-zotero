@@ -48,6 +48,9 @@ def test_item_status_detail_and_actions(api):
     assert call(a, "POST", f"/api/items/{item}/home", {"collection": "NOPE1234"})[0] == 400
     assert call(a, "POST", f"/api/attachments/{att}/remove")[1] == {"ok": True}
     assert call(a, "POST", "/api/items/status", {"keys": [item]})[1]["status"][item] == "removed"
+    eng.sync()  # the removal reaches the tablet: in its trash
+    row = eng.state.doc(att)
+    assert eng.tree.is_trashed(row["doc_id"]) and row["state"] == "removed"
     assert call(a, "POST", f"/api/attachments/{att}/restore")[1] == {"ok": True}
     eng.sync()
     assert call(a, "POST", "/api/items/status", {"keys": [item]})[1]["status"][item] == "synced"

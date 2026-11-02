@@ -62,6 +62,9 @@ class Api:
                     return 404, {"error": f"not found: {e}"}
                 except ValueError as e:
                     return 400, {"error": str(e)}
+                except Exception as e:  # e.g. the library changed mid-request during a sync; the plugin retries
+                    log.exception("API %s %s failed", method, path)
+                    return 503, {"error": f"temporarily unavailable: {e}"}
         return 404, {"error": "no such endpoint"}
 
     # -- handlers ---------------------------------------------------------------------------

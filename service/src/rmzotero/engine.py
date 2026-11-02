@@ -132,6 +132,7 @@ class Engine:
         self._observe(changed_keys)
         rep.derived = self._derive(settings)
         plan = planner.plan(self.lib, settings, self.state)
+        self._apply_removals(rep)
         self._detect_tablet_removals(rep)
         new_docs = self._organise(plan, settings, rep)
         dropped = self.tree.commit()
@@ -710,20 +711,37 @@ class Engine:
         if not row:
             return False
         self.state.update_doc(att_key, restore_requested=1)
+        self.state.set(f"remove_pending:{att_key}", False)
         self.wakeup.set()
         return True
 
     def request_remove(self, att_key: str) -> bool:
+        """Mark removed now; the next cycle moves it to the tablet's trash (after a final markup pull)."""
         row = self.state.doc(att_key)
         if not row or row["state"] != "active":
             return False
-        with self.lock:
-            doc = self.tree.get(row["doc_id"])
-            if doc is not None:
-                self.tree.stage(doc.id, metadata={**doc.metadata, "parent": TRASH})
-                self.tree.commit()
-            self.state.update_doc(att_key, state="removed")
+        self.state.update_doc(att_key, state="removed", restore_requested=0)
+        self.state.set(f"remove_pending:{att_key}", True)
+        self.wakeup.set()
         return True
+
+    def _apply_removals(self, rep: Report) -> None:
+        for row in self.state.docs("removed"):
+            if not self.state.get(f"remove_pending:{row['att_key']}"):
+                continue
+            doc = self.tree.docs.get(row["doc_id"])
+            if doc is not None and not self.tree.is_trashed(doc.id):
+                if row["att_key"] in self.lib.items:
+                    try:
+                        self._sync_doc(row, force=True, rep=rep)
+                    except Exception:
+                        log.exception("final pull failed for %s", row["att_key"])
+                doc = self.tree.docs.get(row["doc_id"])
+                if doc is not None:
+                    self.tree.stage(doc.id, metadata={**doc.metadata, "parent": TRASH})
+            self.state.set(f"remove_pending:{row['att_key']}", False)
+        for doc_id in self.tree.commit():
+            self._note_dropped(doc_id)
 
     def set_home(self, item_key: str, collection_key: str | None) -> None:
         if collection_key:

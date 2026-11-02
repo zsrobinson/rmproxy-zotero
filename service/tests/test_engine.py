@@ -241,3 +241,73 @@ def test_first_sync_of_a_large_library_is_one_commit(world):
     assert time.time() - t < 30
     clock.advance()
     assert eng.sync().synced_docs == 0 and cloud.root_writes == 1
+
+
+@pytest.mark.skipif(not __import__("shutil").which("pandoc"), reason="pandoc not installed")
+def test_epub_becomes_a_tablet_edition_and_typography_change_respects_markup(world):
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from make_epub import make_epub
+
+    z, files, cloud, clock, eng, tablet = world
+    novels = z.add_collection("Novels")
+    book = z.add_item({"itemType": "book", "title": "A Test Novel", "collections": [novels],
+                       "creators": [{"creatorType": "author", "lastName": "Lovelace"}]})
+    epub = z.add_item({"itemType": "attachment", "parentItem": book, "linkMode": "imported_file",
+                       "contentType": "application/epub+zip", "title": "EPUB", "filename": "novel.epub"})
+    files.put(epub, "novel.epub", make_epub())
+    rep = eng.sync()
+    assert not rep.errors, rep.errors
+    editions = [o for o in z.items() if any(t["tag"] == "rmzotero:rendition" for t in o.get("tags", []))]
+    assert len(editions) == 1 and editions[0]["parentItem"] == book and editions[0]["md5"]
+    doc = tablet.doc_named("Lovelace - A Test Novel")
+    assert tablet.folder_path(doc) == ["Zotero", "Novels"]
+    assert edit.page_boxes(tablet.tree.read(doc.file(".pdf")))[0].width == pytest.approx(447.28, abs=0.5)
+
+    # write in the book, then change the font: the marked-up edition is kept, a new one is made
+    pid = tc.pages(doc.content)[1].id
+    tablet.draw(doc, pid, [(0, 400), (50, 450)])
+    eng.sync()
+    clock.advance(500)
+    eng.sync()
+    eng.set_typography(epub, {"font": "Noto Sans"})
+    clock.advance(500)
+    rep = eng.sync()
+    assert not rep.errors, rep.errors
+    editions = [o for o in z.items() if any(t["tag"] == "rmzotero:rendition" for t in o.get("tags", [])) and not o.get("deleted")]
+    assert len(editions) == 2
+    tablet.sync()
+    names = sorted(d.name for d in tablet.tree.docs.values() if not d.is_folder and not tablet.tree.is_trashed(d.id))
+    assert len(names) == 2 and all(n.startswith("Lovelace - A Test Novel — ") for n in names)
+
+
+def test_scanned_reading_gets_a_searchable_copy(tmp_path):
+    import shutil
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from test_derive import OCRMYPDF, scanned
+
+    if not (shutil.which("tesseract") and Path(OCRMYPDF).exists()):
+        pytest.skip("ocrmypdf/tesseract not installed")
+    from rmzotero.engine import Tools
+
+    z, files, cloud, clock = MemoryZotero(7), MemoryFiles(), MemoryCloud(), Clock()
+    cfg = Config(data_dir=tmp_path, zotero_user_id=7, zotero_api_key="", webdav_url="", webdav_username="", webdav_password="",
+                 rmfakecloud_url="", defaults=Settings(ocr=True))
+    eng = Engine(cfg, State(tmp_path / "s.db"), z, files, cloud, clock=clock, tools=Tools(ocrmypdf=OCRMYPDF))
+    course = z.add_collection("PHIL 101")
+    scan = scanned(text_pdf([[("Photocopied reading about virtue ethics", 18)]], size=(400, 300)))
+    item, att = add_paper(z, files, [course], title="Reading 1", pdf=scan)
+    rep = eng.sync()
+    assert not rep.errors, rep.errors
+    copies = [o for o in z.items() if any(t["tag"] == "rmzotero:searchable" for t in o.get("tags", []))]
+    assert len(copies) == 1
+    _fn, data = files.get(copies[0]["key"])
+    assert "virtue" in "".join(c.text for c in TextLayer(data).chars(0)).lower()
+    _fn, original = files.get(att)
+    assert original == scan  # the original scan is untouched
+    tablet = Tablet(cloud, tmp_path)
+    doc = tablet.doc_named("Vaswani - 2017 - Reading 1")
+    assert TextLayer(tablet.tree.read(doc.file(".pdf"))).has_text(0)  # the tablet got the searchable copy

@@ -155,8 +155,9 @@ class CloudTree:
                     continue
                 try:
                     docs[e.name] = self._load_doc(e.name, e.hash)
-                except Exception:  # a broken document must not stop the sync
+                except Exception:  # a broken document must not stop the sync, nor look deleted
                     log.exception("cannot read tablet document %s", e.name)
+                    docs[e.name] = old or TabletDoc(id=e.name, hash=e.hash, entries={}, metadata={"visibleName": "", "parent": ""})
         self.docs = docs
         self.root_hash = root_hash
         return True

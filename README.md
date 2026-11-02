@@ -11,6 +11,8 @@ Primary use cases: **class readings and papers** (often scanned; a searchable co
 
 Design notes: [GLOSSARY.md](GLOSSARY.md), decisions in [docs/adr/](docs/adr/), and the [working assumptions](docs/assumptions.md) that still need checking on real hardware.
 
+**Status:** built and tested end to end against in-memory Zotero/WebDAV, a simulated tablet, and a real rmfakecloud (v0.0.32) in Docker. Not yet run against a real tablet, a real Zotero account, or inside Zotero itself; the two checks in step 3 below cover the riskiest of those.
+
 ## How it fits together
 
 ```

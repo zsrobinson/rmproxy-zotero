@@ -118,11 +118,7 @@ docker compose pull rmzotero && docker compose up -d rmzotero
 
 ## Development
 
-GitHub Actions run the tests on every push (`ci.yml`), publish the Docker image from `main` (`docker.yml`), and publish the plugin when a version tag is pushed (`release.yml`):
-
-```sh
-git tag v0.2.0 && git push origin v0.2.0   # → release with rmzotero.xpi, and image tag 0.2.0
-```
+GitHub Actions run the tests on every push (`ci.yml`), publish the Docker image whenever `service/` changes on `main` (`docker.yml`), and publish a plugin release whenever `plugin/package.json`'s version changes on `main` (`release.yml`). To ship a plugin update, bump that version and merge.
 
 Locally:
 

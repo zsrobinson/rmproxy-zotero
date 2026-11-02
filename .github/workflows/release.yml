@@ -1,9 +1,12 @@
 name: Release plugin
 
-# Push a tag like v0.2.0 to publish a release with the plugin; Zotero picks up updates from it.
+# When plugin/package.json's version is new, publish release vX.Y.Z with the plugin.
+# Zotero checks the latest release's updates.json and updates itself.
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+    paths: ["plugin/**", ".github/workflows/release.yml"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -13,17 +16,29 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - id: version
+        run: |
+          v="v$(jq -r .version plugin/package.json)"
+          echo "tag=$v" >> "$GITHUB_OUTPUT"
+          if gh release view "$v" >/dev/null 2>&1; then echo "exists=true" >> "$GITHUB_OUTPUT"; else echo "exists=false" >> "$GITHUB_OUTPUT"; fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - if: steps.version.outputs.exists == 'false'
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: plugin/package-lock.json
-      - working-directory: plugin
+      - if: steps.version.outputs.exists == 'false'
+        working-directory: plugin
         run: npm ci && npm run build
         env:
-          PLUGIN_VERSION: ${{ github.ref_name }}
-      - uses: softprops/action-gh-release@v2
+          PLUGIN_VERSION: ${{ steps.version.outputs.tag }}
+      - if: steps.version.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
           files: |
             plugin/build/rmzotero.xpi

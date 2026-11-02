@@ -159,12 +159,11 @@ def reconcile(
     by_zidx = {ctx.zidx: ctx for ctx in pages.values()}
 
     # 0. claim marks already linked; group and assign the new ones
-    claimed: set[str] = set()
-    for link in links.values():
-        claimed.update(link.tablet_ids)
+    # item ids are only unique within a page
     new_groups: list[tuple[PageCtx, list[Mark]]] = []
     for ctx in pages.values():
         on_page = [l for l in links.values() if l.page_id == ctx.page_id]
+        claimed = {t for l in on_page for t in l.tablet_ids}
         joins, groups = _group_new(ctx, on_page, claimed)
         for zkey, ids in joins.items():
             links[zkey].tablet_ids = links[zkey].tablet_ids + ids
@@ -195,6 +194,12 @@ def reconcile(
         zotero_changed = (not zotero_gone) and z["version"] != link.zversion and cv.zotero_fingerprint(z, link.page_id) != link.zfp
 
         if zotero_gone and (tablet_gone or not link.tablet_ids):
+            continue
+        if zotero_gone and link.zversion == 0 and link.origin == "tablet":
+            # our earlier create never reached Zotero: try again with the same key
+            data = _from_tablet(members, ctx, text)
+            res.creates.append({**data, "key": zkey})
+            res.links[zkey] = replace(link, tablet_ids=[m.id for m in members], zfp=cv.zotero_fingerprint(data, ctx.page_id), tfp=cv.tablet_fingerprint(members))
             continue
         if zotero_gone:
             if tablet_changed:  # edited on the tablet since; the tablet's version wins

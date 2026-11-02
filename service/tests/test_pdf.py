@@ -52,3 +52,9 @@ def test_text_layer_and_edits():
     assert edit.page_fingerprints(fewer) == [fps[0], fps[2]]
     back = edit.copy_page_into(more, 1, fewer, 1)
     assert edit.page_fingerprints(back)[1] == fps[1]
+
+
+def test_page_text_keeps_line_breaks():
+    pdf = text_pdf([[("First line of a paragraph that wraps onto a second line somewhere along here.", 12), ("Next paragraph.", 12)]], size=(200, 400))
+    t = TextLayer(pdf).page_text(0)
+    assert "\n" in t and "here.\nNext" in t.replace("\r", "")

@@ -53,6 +53,13 @@ class TextLayer:
         self._cache[page_index] = out
         return out
 
+    def page_text(self, page_index: int) -> str:
+        """The page's text in reading order, with line breaks kept (unlike ``chars``)."""
+        tp = self.doc[page_index].get_textpage()
+        n = tp.count_chars()
+        text = tp.get_text_range(0, n) if n > 0 else ""
+        return text.replace("\r\n", "\n").replace("\r", "\n")
+
     def has_text(self, page_index: int) -> bool:
         return any(not c.text.isspace() for c in self.chars(page_index))
 

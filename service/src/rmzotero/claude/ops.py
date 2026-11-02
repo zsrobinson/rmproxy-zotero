@@ -270,7 +270,7 @@ class LibraryOps:
         idx = parse_pages(pages, len(tl), MAX_TEXT_PAGES)
         text = []
         for i in idx:
-            t = "".join(c.text for c in tl.chars(i))
+            t = tl.page_text(i)
             text.append({"page": labels[i], "text": t[:15000]})
         return {"attachment": att["key"], "page_count": len(tl), "pages": text}
 

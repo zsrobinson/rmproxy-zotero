@@ -9,6 +9,7 @@ import os
 import signal
 import sys
 import threading
+import tomllib
 import uuid
 from pathlib import Path
 
@@ -339,6 +340,10 @@ def main(argv: list[str] | None = None) -> int:
         probe.unlink()
     except FileNotFoundError as e:
         print(f"rmzotero: {e.filename} not found. Put rmzotero.toml in the folder mounted at /config.", file=sys.stderr)
+        return 2
+    except tomllib.TOMLDecodeError as e:
+        print(f"rmzotero: {args.config} isn't valid TOML: {e}.\n"
+              "Common causes: the same [section] written twice (merge them into one), or a missing quote.", file=sys.stderr)
         return 2
     except PermissionError as e:
         print(f"rmzotero: permission denied for {e.filename} (running as uid {os.getuid()}, gid {os.getgid()}).\n"

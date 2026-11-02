@@ -493,15 +493,35 @@ class Engine:
                 self.state.exec("UPDATE pointers SET location=?, name=? WHERE att_key=? AND collection_key=?", (p.location, p.name, att_key, ckey))
 
     def _prune_folders(self, plan: planner.Plan) -> None:
-        live = self.tree.all_docs()
+        """Retire folders no longer needed, safely.
+
+        A folder is only trashed once the *committed* tablet tree (what the tablet has already
+        seen) shows it empty, and it was already empty at the previous cycle. Deleting a folder in
+        the same commit that moves its contents out lets the tablet delete the contents with it.
+        Folders are moved to the tablet's trash, never hard-deleted.
+        """
+        staged = self.tree.all_docs()
+        committed = self.tree.docs
         for row in self.state.all("SELECT * FROM folders"):
             if row["fkey"] in plan.folders:
+                self.state.set(f"folder_empty:{row['fkey']}", None)
                 continue
             doc_id = row["doc_id"]
-            children = [d for d in live.values() if d.parent == doc_id]
-            if doc_id in live and not children:
-                self.tree.stage_remove(doc_id)
+            if doc_id not in committed:
                 self.state.exec("DELETE FROM folders WHERE fkey=?", (row["fkey"],))
+                continue
+            empty_now = not any(d.parent == doc_id for d in committed.values()) and not any(d.parent == doc_id for d in staged.values())
+            if not empty_now:
+                self.state.set(f"folder_empty:{row['fkey']}", None)
+                continue
+            if self.state.get(f"folder_empty:{row['fkey']}"):
+                folder = committed[doc_id]
+                if not self.tree.is_trashed(doc_id):
+                    self.tree.stage(doc_id, metadata={**folder.metadata, "parent": TRASH})
+                self.state.exec("DELETE FROM folders WHERE fkey=?", (row["fkey"],))
+                self.state.set(f"folder_empty:{row['fkey']}", None)
+            else:
+                self.state.set(f"folder_empty:{row['fkey']}", self.clock())  # trash it next cycle if still empty
 
     def _retire(self, plan: planner.Plan, rep: Report) -> None:
         """Documents no longer in scope: one last markup pull, then into the tablet's trash."""
@@ -798,6 +818,15 @@ class Engine:
         self.state.set(f"remove_pending:{att_key}", False)
         self.wakeup.set()
         return True
+
+    def restore_all_removed(self) -> int:
+        """Send back every document marked 'removed on tablet' (e.g. after an accidental folder deletion)."""
+        rows = self.state.docs("removed")
+        for row in rows:
+            self.state.update_doc(row["att_key"], restore_requested=1)
+            self.state.set(f"remove_pending:{row['att_key']}", False)
+        self.wakeup.set()
+        return len(rows)
 
     def request_remove(self, att_key: str) -> bool:
         """Mark removed now; the next cycle moves it to the tablet's trash (after a final markup pull)."""

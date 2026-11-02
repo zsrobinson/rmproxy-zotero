@@ -41,6 +41,7 @@ class Api:
         r("POST", r"/api/attachments/(?P<key>[A-Z0-9]{8})/remove", self.remove)
         r("PUT", r"/api/attachments/(?P<key>[A-Z0-9]{8})/typography", self.typography)
         r("POST", r"/api/sync", self.sync_now)
+        r("POST", r"/api/restore-removed", self.restore_removed)
 
     def _route(self, method: str, pattern: str, fn: Callable, auth: bool = True) -> None:
         self.routes.append((method, re.compile(pattern + "$"), fn, auth))
@@ -230,6 +231,9 @@ class Api:
         params = {k: v for k, v in (payload or {}).items() if k in allowed} or None
         self.engine.set_typography(key, params)
         return {"ok": True}
+
+    def restore_removed(self, _):
+        return {"restored": self.engine.restore_all_removed()}
 
     def sync_now(self, _):
         self.engine.wakeup.set()

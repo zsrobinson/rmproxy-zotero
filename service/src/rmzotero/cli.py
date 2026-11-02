@@ -307,6 +307,17 @@ def cmd_debug_page(cfg: Config, args) -> int:
     return 0
 
 
+def cmd_restore_removed(cfg: Config, args) -> int:
+    """Ask the running service to send back every document marked 'removed on tablet'."""
+    import httpx
+
+    _host, _, port = cfg.api_listen.rpartition(":")
+    r = httpx.post(f"http://127.0.0.1:{port}/api/restore-removed", headers={"Authorization": f"Bearer {cfg.api_token}"}, timeout=30)
+    r.raise_for_status()
+    print(f"Restoring {r.json()['restored']} documents at the next sync.")
+    return 0
+
+
 def cmd_diagnostics(cfg: Config, args) -> int:
     """Ask the running service for its diagnostics; fall back to what's stored if it isn't running."""
     import httpx
@@ -347,6 +358,7 @@ def main(argv: list[str] | None = None) -> int:
     ct = sub.add_parser("check-tablet", help="check that the tablet accepts pages written by the service")
     ct.add_argument("--annotate", action="store_true", help="step 2: add a Zotero layer to the page you drew on")
     ct.add_argument("--verify", action="store_true", help="step 3: confirm the Zotero layer and your writing survived")
+    sub.add_parser("restore-removed", help="send back every document marked 'removed on tablet'")
     dg = sub.add_parser("diagnostics", help="what the running service is doing, timings and failures")
     dg.add_argument("--json", action="store_true", help="the full report as JSON")
     dp = sub.add_parser("debug-page", help="print the structure of a tablet page (for troubleshooting)")
@@ -378,7 +390,7 @@ def main(argv: list[str] | None = None) -> int:
               "in the container's environment to the owner of those files.", file=sys.stderr)
         return 2
     return {"run": cmd_run, "sync-once": cmd_sync_once, "register": cmd_register,
-            "check-zotero": cmd_check_zotero, "check-tablet": cmd_check_tablet, "debug-page": cmd_debug_page, "diagnostics": cmd_diagnostics}[args.cmd](cfg, args)
+            "check-zotero": cmd_check_zotero, "check-tablet": cmd_check_tablet, "debug-page": cmd_debug_page, "diagnostics": cmd_diagnostics, "restore-removed": cmd_restore_removed}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":

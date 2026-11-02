@@ -360,3 +360,43 @@ def test_paused_service_reads_the_library_but_leaves_the_tablet_alone(world):
     s.paused = False
     save_settings(eng.state, s, s)
     assert eng.sync().uploaded == 1
+
+
+def test_changing_the_tablet_folder_moves_things_and_trashes_the_old_root_later(world):
+    z, files, cloud, clock, eng, tablet = world
+    ml = z.add_collection("ML")
+    add_paper(z, files, [ml])
+    eng.sync()
+    old_root = eng.state.one("SELECT doc_id FROM folders WHERE fkey='__root__:Zotero'")["doc_id"]
+    s = eng.settings
+    s.sync_root = ""
+    save_settings(eng.state, s, s)
+    clock.advance(10)
+    eng.sync()
+    doc = tablet.doc_named("Vaswani - 2017 - Attention")
+    assert tablet.folder_path(doc) == ["ML"]
+    tablet.sync()
+    # the old root is not deleted in the same commit that moved its contents out
+    assert old_root in tablet.tree.docs and not tablet.tree.is_trashed(old_root)
+    clock.advance(10)
+    eng.sync()  # the committed tree now shows it empty
+    tablet.sync()
+    assert not tablet.tree.is_trashed(old_root)
+    clock.advance(10)
+    eng.sync()  # still empty a cycle later: trashed, not hard-deleted
+    tablet.sync()
+    assert tablet.tree.is_trashed(old_root)
+    assert eng.state.doc(eng.state.docs()[0]["att_key"])["state"] == "active"
+
+
+def test_restore_all_removed(world):
+    z, files, cloud, clock, eng, tablet = world
+    add_paper(z, files, [z.add_collection("ML")])
+    eng.sync()
+    tablet.trash(tablet.doc_named("Vaswani - 2017 - Attention"))
+    eng.sync()
+    assert [r["state"] for r in eng.state.docs()] == ["removed"]
+    assert eng.restore_all_removed() == 1
+    eng.sync()
+    assert [r["state"] for r in eng.state.docs()] == ["active"]
+    assert not tablet.tree.is_trashed(tablet.doc_named("Vaswani - 2017 - Attention").id)

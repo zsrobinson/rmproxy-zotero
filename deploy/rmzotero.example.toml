@@ -1,0 +1,41 @@
+# rmzotero configuration. Copy to config/rmzotero.toml next to your docker-compose.yml.
+# Secrets can instead come from environment variables (shown in comments).
+
+data_dir = "/data"
+
+[zotero]
+user_id = 1234567          # ZOTERO_USER_ID: zotero.org/settings/keys shows "Your userID for use in API calls"
+api_key = "..."            # ZOTERO_API_KEY: a key with read/write access to your personal library
+
+[webdav]
+# The same URL Zotero uses (Settings -> Sync -> File Syncing -> WebDAV); "/zotero" is added if missing.
+url = "https://nas.example.com/webdav"   # WEBDAV_URL
+username = "zotero"                      # WEBDAV_USERNAME
+password = "..."                         # WEBDAV_PASSWORD
+
+[rmfakecloud]
+# rmfakecloud as seen from this container (inside the compose network, the service name works).
+url = "http://rmfakecloud:3000"          # RMFAKECLOUD_URL
+
+[api]
+listen = "0.0.0.0:8787"
+token = "change-me-to-a-long-random-string"   # RMZOTERO_API_TOKEN; paste the same token into the Zotero plugin
+
+[sync]
+# Defaults; the plugin can change these later (they're then stored in /data).
+sync_root = "Zotero"            # tablet folder holding the mirror ("" = top level)
+excluded_collections = []       # collection keys
+pointers = "unrelated"          # all | none | unrelated
+ocr = true                      # searchable copies of scanned PDFs
+archive_after_days = 0          # 0 = never archive unopened documents
+tablet_capacity_gb = 8
+filename_template = ""          # empty = Zotero's default renaming template
+quiet_seconds = 120             # wait this long after the last edit before syncing a document
+poll_seconds = 900              # safety-net check when no notifications arrive
+
+[epub]
+font = "EB Garamond"            # Noto Sans | Noto Sans UI | EB Garamond | Noto Mono | Noto Serif
+text_scale = 1.0                # 0.7 0.8 1 1.2 1.5 2
+line_height = 150               # 100 150 200
+margins = 125                   # 50 125 200
+alignment = "justify"           # justify | left

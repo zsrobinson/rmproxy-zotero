@@ -28,7 +28,7 @@ PAGE_H_MM = 1872 / 226 * 25.4  # 210.4 mm
 BASE_PT = 10.0  # text size at text_scale 1
 
 FONT_FALLBACKS = {
-    "EB Garamond": ["EB Garamond", "Noto Serif", "DejaVu Serif"],
+    "EB Garamond": ["EB Garamond", "EB Garamond 12", "Noto Serif", "DejaVu Serif"],
     "Noto Serif": ["Noto Serif", "DejaVu Serif"],
     "Noto Sans": ["Noto Sans", "DejaVu Sans"],
     "Noto Sans UI": ["Noto Sans UI", "Noto Sans", "DejaVu Sans"],
@@ -157,10 +157,13 @@ def _clean_typst(body: str, cover_name: str | None = None) -> str:
     body = re.sub(r"<[^<>\s]*[#/.][^<>\s]*>", "", body)
     # internal links to those anchors: keep the link text
     body = re.sub(r"#link\(<[^>]*>\)", "#box", body)
+    # empty wrappers left behind by EPUB anchors would otherwise produce blank pages
+    body = re.sub(r"#block\[\s*\]", "", body)
     # EPUB footnotes often start with the back-reference's leftover punctuation
     body = re.sub(r"#footnote\[\.\s*", "#footnote[", body)
     if cover_name:
-        body = re.sub(r'(?m)^#image\("[^"]*' + re.escape(cover_name) + r'"\)\s*$', "", body, count=1)
+        # pandoc places the cover inline (as #image(...) or #box(..., image(...))); we give it its own page instead
+        body = re.sub(r'(?m)^.*image\("[^"]*' + re.escape(cover_name) + r'"\).*$', "", body, count=1)
     return body
 
 

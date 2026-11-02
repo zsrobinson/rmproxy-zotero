@@ -1,0 +1,16 @@
+{
+  "name": "rmzotero-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Zotero plugin for rmzotero: reMarkable status, controls and settings inside Zotero",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "node build.mjs",
+    "test": "node build.mjs --test && node --test build/test/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "esbuild": "0.24.2",
+    "typescript": "5.6.3"
+  }
+}

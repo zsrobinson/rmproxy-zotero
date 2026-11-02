@@ -61,6 +61,8 @@ def test_settings_and_collections(api):
     code, cols = call(a, "GET", "/api/collections")
     by = {c["name"]: c for c in cols["collections"]}
     assert by["ML"]["documents"] == 1 and by["ML"]["bytes"] >= len(PAPER) and by["Other"]["excluded"]
+    assert call(a, "POST", "/api/collections/projection", {"excluded_collections": [ml]})[1]["documents"] == 0
+    assert call(a, "POST", "/api/collections/projection", {"excluded_collections": []})[1]["documents"] == 1
 
 
 def test_real_http_server(api):

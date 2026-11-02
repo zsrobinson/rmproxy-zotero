@@ -32,6 +32,7 @@ class Api:
         r("GET", r"/api/settings", self.get_settings)
         r("PUT", r"/api/settings", self.put_settings)
         r("GET", r"/api/collections", self.collections)
+        r("POST", r"/api/collections/projection", self.projection)
         r("POST", r"/api/items/status", self.items_status)
         r("GET", r"/api/items/(?P<key>[A-Z0-9]{8})", self.item_detail)
         r("POST", r"/api/items/(?P<key>[A-Z0-9]{8})/home", self.set_home)
@@ -112,6 +113,16 @@ class Api:
         out.sort(key=lambda c: [p.lower() for p in c["path"]])
         storage = eng.state.get("storage") or {}
         return {"collections": out, "storage": storage}
+
+    def projection(self, payload):
+        """Documents and bytes the tablet would hold with a candidate set of excluded collections."""
+        eng = self.engine
+        excluded = [k for k in payload.get("excluded_collections", []) if k in eng.lib.collections]
+        p = planner.plan(eng.lib, Settings.from_dict({"excluded_collections": excluded}, eng.settings), eng.state)
+        sizes = {r["att_key"]: r["size"] or 0 for r in eng.state.docs()}
+        storage = eng.state.get("storage") or {}
+        return {"documents": len(p.docs), "bytes": sum(sizes.get(k, 0) for k in p.docs),
+                "unknown_sizes": sum(1 for k in p.docs if k not in sizes), "capacity_bytes": storage.get("capacity_bytes")}
 
     def _doc_info(self, att_key: str) -> dict:
         eng = self.engine

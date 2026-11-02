@@ -1,0 +1,55 @@
+<vbox id="rmz-prefs" xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul" xmlns:html="http://www.w3.org/1999/xhtml">
+  <groupbox>
+    <label><html:h2>reMarkable sync service</html:h2></label>
+    <html:div style="display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-items:center;max-width:640px">
+      <html:label for="rmz-url">Service address</html:label>
+      <html:input id="rmz-url" type="url" placeholder="https://rmzotero.example.com"/>
+      <html:label for="rmz-token">Token</html:label>
+      <html:input id="rmz-token" type="password" placeholder="api.token from rmzotero.toml"/>
+    </html:div>
+    <hbox style="margin-top:6px">
+      <html:button id="rmz-connect">Connect</html:button>
+      <html:button id="rmz-sync">Sync now</html:button>
+    </hbox>
+    <html:div id="rmz-status" style="margin-top:6px"/>
+  </groupbox>
+
+  <vbox id="rmz-settings" hidden="true">
+    <groupbox>
+      <label><html:h2>On the tablet</html:h2></label>
+      <html:div style="display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-items:center;max-width:640px">
+        <html:label for="rmz-root">Folder on the tablet</html:label>
+        <html:input id="rmz-root" placeholder="Zotero (empty = top level)"/>
+        <html:label for="rmz-pointers">Pointers to items in several collections</html:label>
+        <html:select id="rmz-pointers"/>
+        <html:label for="rmz-archive">Archive documents unopened for (days, 0 = never)</html:label>
+        <html:input id="rmz-archive" type="number" min="0"/>
+        <html:label for="rmz-capacity">Tablet storage (GB)</html:label>
+        <html:input id="rmz-capacity" type="number" min="1" step="0.5"/>
+        <html:label for="rmz-ocr">Make scanned PDFs searchable</html:label>
+        <html:input id="rmz-ocr" type="checkbox"/>
+      </html:div>
+    </groupbox>
+    <groupbox>
+      <label><html:h2>Collections to sync</html:h2></label>
+      <html:div>Your whole library is synced except unticked collections (and their subcollections).</html:div>
+      <html:div id="rmz-projection" style="margin:4px 0;font-weight:600"/>
+      <html:div id="rmz-collections" style="max-height:320px;overflow:auto;border:1px solid var(--fill-quinary,#ccc);padding:6px"/>
+    </groupbox>
+    <groupbox>
+      <label><html:h2>EPUB text settings (tablet editions)</html:h2></label>
+      <html:div style="display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-items:center;max-width:640px">
+        <html:label for="rmz-font">Font</html:label><html:select id="rmz-font"/>
+        <html:label for="rmz-scale">Text size</html:label><html:select id="rmz-scale"/>
+        <html:label for="rmz-leading">Line spacing</html:label><html:select id="rmz-leading"/>
+        <html:label for="rmz-margins">Margins</html:label><html:select id="rmz-margins"/>
+        <html:label for="rmz-align">Alignment</html:label><html:select id="rmz-align"/>
+      </html:div>
+    </groupbox>
+    <hbox><html:button id="rmz-save">Save settings</html:button></hbox>
+    <groupbox>
+      <label><html:h2>Recent activity</html:h2></label>
+      <html:pre id="rmz-events" style="white-space:pre-wrap;font:inherit"/>
+    </groupbox>
+  </vbox>
+</vbox>

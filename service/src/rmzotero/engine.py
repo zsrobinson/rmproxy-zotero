@@ -220,7 +220,7 @@ class Engine:
 
     def _derivation_fingerprint(self, source_key: str, kind: str, settings: Settings) -> str:
         att = self.lib.items.get(source_key) or {}
-        extra = rend.params_hash(self._typography(source_key, settings)) if kind == "rendition" else ""
+        extra = f"{rend.params_hash(self._typography(source_key, settings))}|r{rend.RENDERER_VERSION}" if kind == "rendition" else ""
         return f"{att.get('md5') or att.get('version')}|{extra}"
 
     def _derive(self, settings: Settings, rep: Report | None = None) -> int:

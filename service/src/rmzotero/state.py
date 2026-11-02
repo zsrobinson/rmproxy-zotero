@@ -66,6 +66,11 @@ class State:
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
+        if self.path != ":memory:":
+            # every write otherwise waits for a full sync to disk, which is slow on a NAS;
+            # WAL with NORMAL still never corrupts the database, at worst losing the last write on power loss
+            self.db.execute("PRAGMA journal_mode=WAL")
+            self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.executescript(SCHEMA)
         self.lock = threading.RLock()
 

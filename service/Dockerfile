@@ -21,5 +21,8 @@ ENV RMZOTERO_CONFIG=/config/rmzotero.toml \
     PYTHONUNBUFFERED=1
 EXPOSE 8787 8788
 HEALTHCHECK --interval=60s --timeout=5s CMD python -c "import urllib.request,sys; urllib.request.urlopen('http://127.0.0.1:8787/api/health', timeout=4)" || exit 1
+# last, so a new commit doesn't invalidate the cached layers above
+ARG REVISION=""
+ENV RMZOTERO_REVISION=$REVISION
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["run"]

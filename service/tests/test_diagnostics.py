@@ -60,3 +60,18 @@ def test_diagnostics_report_and_endpoints(world, tmp_path):  # noqa: F811
     json.dumps(d)  # serialisable for the API and the connector
     code, body = Api(eng, "t").dispatch("GET", "/api/diagnostics", {"authorization": "Bearer t"}, b"")
     assert code == 200 and body["library"]["items"] >= 2
+
+
+def test_nested_steps_in_a_phase_are_not_counted_twice():
+    import time as _t
+
+    from rmzotero.diagnostics import Activity
+
+    act = Activity()
+    with act.doing("conversions"):
+        for book in ("a", "b"):
+            with act.doing("conversions", book):
+                assert act.what == f"conversions: {book}"
+                _t.sleep(0.05)
+    assert act.what == "idle"
+    assert 0.1 <= act.phases["conversions"] < 0.15

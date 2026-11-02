@@ -11,7 +11,7 @@ import time
 import traceback
 from contextlib import contextmanager
 
-from . import __version__
+from . import REVISION, __version__
 from .state import State
 
 BACKOFF_FIRST = 300.0  # 5 minutes
@@ -61,17 +61,24 @@ class Activity:
         self.what = "idle"
         self.since = clock()
         self.phases: dict[str, float] = {}
+        self._open: list[str] = []
 
     @contextmanager
     def doing(self, phase: str, detail: str | None = None):
         prev_what, prev_since = self.what, self.since
         self.what = f"{phase}: {detail}" if detail else phase
         self.since = self.clock()
+        # a step inside the same phase (one book within "conversions") updates what we're doing,
+        # but its time already counts towards the phase: don't add it twice
+        nested = phase in self._open
+        self._open.append(phase)
         start = time.perf_counter()
         try:
             yield
         finally:
-            self.phases[phase] = self.phases.get(phase, 0.0) + (time.perf_counter() - start)
+            self._open.pop()
+            if not nested:
+                self.phases[phase] = self.phases.get(phase, 0.0) + (time.perf_counter() - start)
             self.what, self.since = prev_what, prev_since
 
 
@@ -164,7 +171,7 @@ def _collect(engine, light: bool = False) -> dict:
     counts = {r["state"]: r["n"] for r in state.all("SELECT state, COUNT(*) AS n FROM docs GROUP BY state")}
     return {
         "service": {
-            "version": __version__, "now": now, "uptime_s": round(now - engine.started_at),
+            "version": __version__, "revision": REVISION, "now": now, "uptime_s": round(now - engine.started_at),
             "paused": settings.paused, "quiet_seconds": engine.cfg.quiet_seconds, "poll_seconds": engine.cfg.poll_seconds,
         },
         "activity": {"doing": act.what, "for_s": round(now - act.since, 1)},
@@ -184,7 +191,7 @@ def _collect(engine, light: bool = False) -> dict:
 def format_text(d: dict) -> str:
     """A short human summary of ``collect()`` output (for ``rmzotero diagnostics``)."""
     s, a = d["service"], d["activity"]
-    lines = [f"rmzotero {s['version']} - up {s['uptime_s'] // 60} min{' - PAUSED' if s['paused'] else ''}",
+    lines = [f"rmzotero {s['version']}{' (' + s['revision'][:7] + ')' if s.get('revision') else ''} - up {s['uptime_s'] // 60} min{' - PAUSED' if s['paused'] else ''}",
              f"Now: {a['doing']} (for {a['for_s']}s)"]
     lc = d.get("last_cycle")
     if lc:

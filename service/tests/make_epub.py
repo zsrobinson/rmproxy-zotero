@@ -13,7 +13,20 @@ def png(w=60, h=80, rgb=(200, 80, 40)) -> bytes:
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
 
 
-def make_epub(internal_links: bool = False) -> bytes:
+# Constructs from real commercial EPUBs that broke typesetting: chapters wrapped in divs (page
+# breaks inside containers), pixel image sizes (bare numbers in Typst), "//" in text (a Typst
+# comment that swallowed the closing bracket), and a chapter heading inside a block quote.
+TRICKY = """
+<div class="chapter"><div class="inner">
+<h1 id="ch3">Chapter Three</h1>
+<p>Her notes said <em>see either/or // both at https://example.org/a//b for more</em> [sic].</p>
+<p><img src="fig.png" width="600" height="400" alt="wide"/></p>
+<blockquote><h1>An epigraph heading</h1><p>Quoted words.</p></blockquote>
+</div></div>
+"""
+
+
+def make_epub(internal_links: bool = False, tricky: bool = False) -> bytes:
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp)
         (d / "cover.png").write_bytes(png())
@@ -38,6 +51,7 @@ lang: en
 # Chapter Two {{#chapter-two}}
 
 {para}{extra}
+{TRICKY if tricky else ""}
 
 [^1]: A footnote that should sit at the bottom of the page.
 """

@@ -82,3 +82,30 @@ def test_rendition_with_internal_links():
     pdf = render_epub(make_epub(internal_links=True), EpubDefaults())
     tl = TextLayer(pdf)
     assert "the first chapter" in "".join(c.text for i in range(len(tl)) for c in tl.chars(i))
+
+
+@pytest.mark.skipif(not shutil.which("pandoc"), reason="pandoc not installed")
+def test_rendition_survives_constructs_from_real_epubs():
+    pdf = render_epub(make_epub(tricky=True), EpubDefaults())
+    tl = TextLayer(pdf)
+    pages = ["".join(c.text for c in tl.chars(i)) for i in range(len(tl))]
+    text = "".join(pages)
+    assert "either/or // both" in text and "[sic]" in text and "Quoted words" in text
+    # every chapter starts on a page of its own
+    for title in ("Chapter One", "Chapter Two", "Chapter Three"):
+        page = next(p for p in pages if title in p)
+        assert page.lstrip().startswith(title), page[:80]
+
+
+def test_typst_errors_point_at_the_source():
+    from rmzotero.derive.rendition import RenditionError, _typst_error
+    import tempfile
+    import typst
+
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "book.typ"
+        src.write_text("Hello #emph[a // b]\n")
+        with pytest.raises(Exception) as ei:
+            typst.compile(str(src))
+        msg = _typst_error(ei.value, src)
+    assert "unclosed delimiter" in msg and "#emph[a // b]" in msg and tmp not in msg

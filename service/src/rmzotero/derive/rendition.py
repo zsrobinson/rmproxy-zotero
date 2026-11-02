@@ -36,6 +36,104 @@ FONT_FALLBACKS = {
 }
 LINE_HEIGHT = {100: 1.2, 150: 1.5, 200: 2.0}
 
+# Bump when the conversion changes in a way that could fix books that failed before: failed
+# renditions are then retried right away instead of waiting out their backoff.
+RENDERER_VERSION = 2
+
+# A pandoc filter that turns the EPUB's document tree into something Typst can always compile,
+# working on structure rather than patching pandoc's Typst text afterwards:
+# - EPUB anchors and ids aren't valid Typst labels, and we don't keep cross-references, so ids
+#   go, internal links keep only their text, and empty anchor spans disappear;
+# - each EPUB file (chapter, title page...) starts on a new page, as it does in a reader, and so
+#   does each top-level chapter heading (weak breaks, so doubles collapse);
+# - wrapper divs are unwrapped: a page break inside a container is an error in Typst;
+# - image sizes are kept only as percentages: EPUB pixel sizes come through as bare numbers;
+# - "//" in text would start a Typst comment and swallow the rest of the line.
+LUA_FILTER = r"""
+local function internal(target)
+  return not target:match("^%a[%w+.-]*:")
+end
+
+local function file_marker(b)
+  if (b.t ~= "Para" and b.t ~= "Plain") or #b.content ~= 1 then return false end
+  local s = b.content[1]
+  return s.t == "Span" and #s.content == 0 and s.identifier:match("%.x?html?$") ~= nil
+end
+
+local PAGEBREAK = pandoc.RawBlock("typst", "#pagebreak(weak: true)")
+
+local function clear(el)
+  el.identifier = ""
+  return el
+end
+
+local unwrap = {
+  Div = function(el) return el.content end,
+}
+
+local tidy = {
+  Span = function(el)
+    if #el.content == 0 then
+      if el.identifier:match("%.x?html?$") then return nil end  -- file markers: handled below
+      return {}
+    end
+    return clear(el)
+  end,
+  Link = function(el)
+    if internal(el.target) then return el.content end
+    return clear(el)
+  end,
+  Image = function(el)
+    for _, k in ipairs({"width", "height"}) do
+      local v = el.attributes[k]
+      if v and not v:match("^%s*[%d.]+%%%s*$") then el.attributes[k] = nil end
+    end
+    return clear(el)
+  end,
+  Header = clear, CodeBlock = clear, Code = clear, Table = clear, Figure = clear,
+  Str = function(el)
+    if not el.text:find("//", 1, true) then return nil end
+    local out, buf, prev = {}, "", false
+    for ch in el.text:gmatch(utf8.charpattern) do
+      if ch == "/" and prev then
+        if buf ~= "" then out[#out + 1] = pandoc.Str(buf); buf = "" end
+        out[#out + 1] = pandoc.RawInline("typst", "\\/")
+      else
+        buf = buf .. ch
+      end
+      prev = (ch == "/")
+    end
+    if buf ~= "" then out[#out + 1] = pandoc.Str(buf) end
+    return out
+  end,
+}
+
+local breaks = {
+  Pandoc = function(doc)
+    local out = {}
+    for _, b in ipairs(doc.blocks) do
+      if file_marker(b) then
+        out[#out + 1] = PAGEBREAK
+      else
+        if b.t == "Header" and b.level == 1 then out[#out + 1] = PAGEBREAK end
+        out[#out + 1] = b
+      end
+    end
+    doc.blocks = out
+    return doc
+  end,
+}
+
+local last = {
+  Span = function(el)
+    if #el.content == 0 then return {} end
+    return clear(el)
+  end,
+}
+
+return {unwrap, tidy, breaks, last}
+"""
+
 
 class RenditionError(Exception):
     pass
@@ -111,7 +209,7 @@ def conf_typst(t: EpubDefaults, cover_file: str | None) -> str:
   set text(font: ({", ".join(json.dumps(f) for f in fonts)},), size: {size:.2f}pt, lang: lang, hyphenate: {justify})
   set par(justify: {justify}, linebreaks: "optimized", leading: {leading:.2f}em, first-line-indent: 1.2em)
   show heading: it => {{ set par(first-line-indent: 0em); v(0.8em); it; v(0.4em) }}
-  show heading.where(level: 1): it => {{ pagebreak(weak: true); set text(size: {size * 1.6:.2f}pt); v(2em); it }}
+  show heading.where(level: 1): it => {{ set text(size: {size * 1.6:.2f}pt); v(2em); it }}
   set image(fit: "contain")
   {cover}
   doc
@@ -136,7 +234,9 @@ def render_epub(data: bytes, typography: EpubDefaults, *, pandoc: str = "pandoc"
             cover_name = "cover-" + hashlib.sha1(img).hexdigest()[:8] + Path(name).suffix
             (d / cover_name).write_bytes(img)
         (d / "conf.typ").write_text(conf_typst(typography, cover_name))
-        cmd = [pandoc, "book.epub", "-t", "typst", "-s", "-V", "template=conf.typ", "--extract-media=media", "-o", "book.typ"]
+        (d / "epub.lua").write_text(LUA_FILTER)
+        cmd = [pandoc, "book.epub", "-t", "typst", "-s", "-V", "template=conf.typ", "--lua-filter=epub.lua",
+               "--extract-media=media", "-o", "book.typ"]
         p = subprocess.run(cmd, cwd=d, capture_output=True, text=True, timeout=600)
         if p.returncode != 0:
             raise RenditionError(f"pandoc failed: {p.stderr.strip()[:500]}")
@@ -146,32 +246,21 @@ def render_epub(data: bytes, typography: EpubDefaults, *, pandoc: str = "pandoc"
         try:
             return typst.compile(str(d / "book.typ"), root=str(d), font_paths=font_paths or [])
         except Exception as e:  # typst raises its own error type
-            raise RenditionError(f"typesetting failed: {str(e)[:500]}") from e
+            raise RenditionError(f"typesetting failed: {_typst_error(e, d / 'book.typ')[:900]}") from e
 
 
 def _clean_typst(body: str, cover_name: str | None = None) -> str:
-    """Make pandoc's EPUB output compile: EPUB anchors aren't valid Typst labels.
-
-    Order matters: links and references *to* anchors are rewritten first, then the anchors
-    themselves are removed (removing them first left ``#link()`` with no target).
-    """
-    # internal links to anchors: keep the link text
-    body = re.sub(r"#link\(\s*<[^<>]*>\s*\)", "#box", body)
-    # references to anchors (e.g. figure/footnote cross-references): drop them
-    body = re.sub(r"#ref\(\s*<[^<>]*>\s*\)", "", body)
-    body = re.sub(r"@[A-Za-z0-9_.:\-]*\.x?html[#A-Za-z0-9_.:\-]*", "", body)
-    # standalone anchor labels like <ch001.xhtml#intro> (we don't keep cross-references)
-    body = re.sub(r"(?m)^[ \t]*<[^<>\n]*>[ \t]*$", "", body)
-    # inline labels after headings etc.
-    body = re.sub(r"<[^<>\s]*[#/.][^<>\s]*>", "", body)
-    # empty wrappers left behind by EPUB anchors would otherwise produce blank pages
-    body = re.sub(r"#block\[\s*\]", "", body)
-    # EPUB footnotes often start with the back-reference's leftover punctuation
-    body = re.sub(r"#footnote\[\.\s*", "#footnote[", body)
+    """Remove the cover image pandoc places inline: we give it a page of its own instead."""
     if cover_name:
-        # pandoc places the cover inline (as #image(...) or #box(..., image(...))); we give it its own page instead
         body = re.sub(r'(?m)^.*image\("[^"]*' + re.escape(cover_name) + r'"\).*$', "", body, count=1)
     return body
+
+
+def _typst_error(e: Exception, src: Path) -> str:
+    """The error with Typst's own pointer at the offending source line, for the diagnostics."""
+    diag = getattr(e, "diagnostic", None) or str(e)
+    diag = re.sub(r"\S*" + re.escape(src.name), src.name, diag)
+    return diag.strip()
 
 
 def params_hash(t: EpubDefaults) -> str:

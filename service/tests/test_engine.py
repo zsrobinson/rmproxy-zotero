@@ -1,6 +1,7 @@
 """End-to-end: Zotero (in memory) <-> engine <-> rmfakecloud (in memory) <-> a simulated tablet."""
 
 import json
+import uuid
 from pathlib import Path
 
 import pytest
@@ -36,8 +37,9 @@ class Clock:
 class Tablet:
     """Edits documents the way the tablet would: new page files, cPages changes, metadata moves."""
 
-    def __init__(self, cloud, tmp):
+    def __init__(self, cloud, tmp, legacy=True):
         self.tree = CloudTree(cloud, BlobCache(tmp / "tablet"))
+        self.legacy = legacy
 
     def sync(self):
         self.tree.root_hash = ""
@@ -53,8 +55,13 @@ class Tablet:
         if tc.all_pages(doc.content):
             return doc
         n = doc.content.get("pageCount") or 1
-        own = tc.new_pdf_content(n)["cPages"]  # fresh page ids, chosen by the tablet
-        self.tree.stage(doc.id, content={**doc.content, "cPages": own})
+        if self.legacy:  # like software 3.27.3 on a reMarkable 2: a plain page list, formatVersion 1
+            ids = [str(uuid.uuid4()) for _ in range(n)]
+            content = {**doc.content, "formatVersion": 1, "pages": ids, "redirectionPageMap": list(range(n))}
+            content.pop("cPages", None)
+        else:  # newer software: cPages
+            content = {**doc.content, "cPages": tc.new_pdf_content(n)["cPages"]}
+        self.tree.stage(doc.id, content=content)
         self.tree.commit()
         return self.doc_named(name)
 
@@ -73,9 +80,14 @@ class Tablet:
 
     def insert_note_page_after(self, doc, index, points):
         content = json.loads(json.dumps(doc.content))
-        ps = sorted(content["cPages"]["pages"], key=lambda p: p["idx"]["value"])
-        new_idx = ps[index]["idx"]["value"] + "m"
-        content["cPages"]["pages"].append({"id": "note-page", "idx": {"timestamp": "1:5", "value": new_idx}})
+        if tc.is_legacy(content):
+            content["pages"].insert(index + 1, "note-page")
+            content["redirectionPageMap"].insert(index + 1, -1)
+            content["pageCount"] = len(content["pages"])
+        else:
+            ps = sorted(content["cPages"]["pages"], key=lambda p: p["idx"]["value"])
+            new_idx = ps[index]["idx"]["value"] + "m"
+            content["cPages"]["pages"].append({"id": "note-page", "idx": {"timestamp": "1:5", "value": new_idx}})
         page = Page.empty()
         page.add(page.first_user_layer_id(), [si.Line(si.PenColor.BLACK, si.Pen.FINELINER_2, [si.Point(x, y, 0, 0, 8, 100) for x, y in points], 1.0, 0.0)])
         self.tree.stage(doc.id, content=content, files={"/note-page.rm": page.to_bytes()})
@@ -86,8 +98,8 @@ class Tablet:
         self.tree.commit()
 
 
-@pytest.fixture
-def world(tmp_path):
+@pytest.fixture(params=["legacy-pages", "cpages"])
+def world(tmp_path, request):
     z = MemoryZotero(7)
     files = MemoryFiles()
     cloud = MemoryCloud()
@@ -96,7 +108,7 @@ def world(tmp_path):
                  webdav_password="", rmfakecloud_url="", quiet_seconds=120, defaults=Settings(ocr=False))
     state = State(tmp_path / "data" / "state.db")
     eng = Engine(cfg, state, z, files, cloud, clock=clock)
-    return z, files, cloud, clock, eng, Tablet(cloud, tmp_path)
+    return z, files, cloud, clock, eng, Tablet(cloud, tmp_path, legacy=request.param == "legacy-pages")
 
 
 def add_paper(z, files, collections, title="Attention", pdf=PAPER):

@@ -135,8 +135,29 @@ def ensure_cpages(content: dict, pdf_page_count: int) -> dict:
     return out
 
 
-def set_deleted(content: dict, page_id: str, deleted: bool) -> dict:
+def is_legacy(content: dict) -> bool:
+    """Older software (e.g. 3.27.3 on a reMarkable 2) keeps a plain ``pages`` list and no ``cPages``."""
+    return not (content.get("cPages") or {}).get("pages") and bool(content.get("pages"))
+
+
+def set_deleted(content: dict, page_id: str, deleted: bool, *, index: int | None = None, redir: int | None = None) -> dict:
+    """Delete or restore a page. In the legacy format a deleted page simply leaves the list,
+    so restoring needs its position (``index``) and PDF page (``redir``, None for a note page)."""
     out = copy.deepcopy(content)
+    if is_legacy(content):
+        pages = list(out.get("pages") or [])
+        redirs = list(out.get("redirectionPageMap") or range(len(pages)))
+        if deleted and page_id in pages:
+            i = pages.index(page_id)
+            del pages[i]
+            del redirs[i]
+        elif not deleted and page_id not in pages:
+            i = len(pages) if index is None else max(0, min(index, len(pages)))
+            pages.insert(i, page_id)
+            redirs.insert(i, -1 if redir is None else redir)
+        out["pages"], out["redirectionPageMap"] = pages, redirs
+        out["pageCount"] = len(pages)
+        return out
     for p in out["cPages"]["pages"]:
         if p["id"] == page_id:
             if deleted:
@@ -158,21 +179,3 @@ def page_modified_ms(content: dict, page_id: str) -> int:
                 return 0
     return 0
 
-
-def register_author(content: dict, author_uuid: str) -> tuple[dict, int]:
-    """Make sure the document lists ``author_uuid`` among its authors (``cPages.uuids``).
-
-    Each device that edits a document's pages appears there with an index, and the
-    pages' items carry that index. The tablet appears to ignore edits by authors the
-    document doesn't list. Returns (content, index); content is unchanged if already listed.
-    """
-    cp = content.get("cPages") or {}
-    uuids = list(cp.get("uuids") or [])
-    for u in uuids:
-        if str(u.get("first", "")).lower() == author_uuid.lower():
-            return content, int(u.get("second"))
-    index = max([int(u.get("second", 0)) for u in uuids] + [1]) + 1
-    out = copy.deepcopy(content)
-    out.setdefault("cPages", {}).setdefault("uuids", [])
-    out["cPages"]["uuids"] = uuids + [{"first": author_uuid, "second": index}]
-    return out, index

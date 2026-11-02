@@ -73,11 +73,36 @@ class Mark:
         return self.layer == ZOTERO_LAYER
 
 
+def _crdt_ids(obj, seen=None):
+    """Every CrdtId anywhere in a block structure: ids, parents, timestamps, values."""
+    import dataclasses
+
+    if seen is None:
+        seen = set()
+    if isinstance(obj, CrdtId):
+        yield obj
+        return
+    if id(obj) in seen or isinstance(obj, (str, bytes, int, float, bool)) or obj is None:
+        return
+    seen.add(id(obj))
+    if dataclasses.is_dataclass(obj):
+        for f in dataclasses.fields(obj):
+            yield from _crdt_ids(getattr(obj, f.name), seen)
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            yield from _crdt_ids(k, seen)
+            yield from _crdt_ids(v, seen)
+    elif isinstance(obj, (list, tuple, set)):
+        for v in obj:
+            yield from _crdt_ids(v, seen)
+    elif hasattr(obj, "_items"):  # CrdtSequence
+        yield from _crdt_ids(list(obj._items.values()), seen)
+
+
 class Page:
     def __init__(self, blocks: list[Block]):
         self.blocks = blocks
-        # The author index the document's .content registers for the service (see content.register_author);
-        # when unset, the next free index in this page is used.
+        # Optional override of the author index new items are written under (see _author).
         self.author_index: int | None = None
 
     # -- construction ---------------------------------------------------------
@@ -146,31 +171,29 @@ class Page:
     # -- editing ------------------------------------------------------------------
 
     def _author(self) -> int:
+        """The author index new items are written under.
+
+        The tablet appears to discard items by authors it doesn't know when it merges a page
+        (verified on software 3.27.3), so by default the service writes as the page's own device
+        author, continuing its numbering. A brand-new page gets a fresh device author.
+        """
         ab = next((b for b in self.blocks if isinstance(b, AuthorIdsBlock)), None)
         if ab is None:
-            ab = AuthorIdsBlock(author_uuids={})
+            ab = AuthorIdsBlock(author_uuids={1: uuid.uuid4()})
             self.blocks.insert(0, ab)
-        for k, v in ab.author_uuids.items():
-            if v == SERVICE_AUTHOR:
-                return k
-        k = self.author_index if self.author_index is not None else max(ab.author_uuids, default=1) + 1
-        if k in ab.author_uuids:
-            raise ValueError(f"author index {k} is already used by another device on this page")
-        ab.author_uuids[k] = SERVICE_AUTHOR
-        return k
+        if self.author_index is not None:
+            if self.author_index not in ab.author_uuids:
+                ab.author_uuids[self.author_index] = SERVICE_AUTHOR
+            return self.author_index
+        if not ab.author_uuids:
+            ab.author_uuids[1] = uuid.uuid4()
+        return min(ab.author_uuids)
 
     def _next_id(self) -> CrdtId:
         author = self._author()
-        hi = 0
-        for b in self.blocks:
-            for attr in ("tree_id",):
-                v = getattr(b, attr, None)
-                if isinstance(v, CrdtId) and v.part1 == author:
-                    hi = max(hi, v.part2)
-            item = getattr(b, "item", None)
-            if item is not None and item.item_id.part1 == author:
-                hi = max(hi, item.item_id.part2)
-        return CrdtId(author, hi + 1)
+        hi = max((c.part2 for c in _crdt_ids(self.blocks) if c.part1 == author), default=0)
+        # leave a gap so the tablet's own next ids (it may keep a counter in memory) can't collide
+        return CrdtId(author, max(hi + 1, getattr(self, "_floor", 0)))
 
     def _insert_after_last(self, block: Block, kind: type) -> None:
         idx = max((i for i, b in enumerate(self.blocks) if isinstance(b, kind)), default=None)

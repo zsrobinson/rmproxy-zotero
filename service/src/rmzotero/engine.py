@@ -34,7 +34,7 @@ from .state import State
 from .structure import StructureError, reconcile_structure
 from .tablet import content as tc
 from .tablet.cloud import BlobStore
-from .tablet.scene import SERVICE_AUTHOR, Page
+from .tablet.scene import Page
 from .tablet.tree import COLLECTION, DOCUMENT, TRASH, BlobCache, CloudTree, new_metadata
 from .zotero.client import ZoteroAPI, new_key
 from .zotero.library import Library
@@ -533,11 +533,16 @@ class Engine:
 
         # tablet-side structural edits
         new_content = content
-        _registered, author_index = tc.register_author(content, str(SERVICE_AUTHOR))
         for pid in st.tablet_delete:
             new_content = tc.set_deleted(new_content, pid, True)
-        for pid in st.tablet_undelete:
-            new_content = tc.set_deleted(new_content, pid, False)
+        if st.tablet_undelete:
+            # in the legacy format a deleted page has left the list; put it back where it was
+            prev_raw = self.cache.get_local(row["tablet_content_hash"] or "")
+            prev = {p.id: p for p in tc.all_pages(json.loads(prev_raw))} if prev_raw else {}
+            for pid in st.tablet_undelete:
+                ref = prev.get(pid)
+                new_content = tc.set_deleted(new_content, pid, False, index=st.mapping.index(pid) if pid in st.mapping else None,
+                                             redir=ref.redir if ref else None)
         tablet_files: dict[str, bytes] = {}
         tablet_pdf = self.tree.read(doc.file(".pdf"))
         redir = {p.id: p.redir for p in tc.all_pages(content)}
@@ -562,7 +567,6 @@ class Engine:
         for zidx, pid in enumerate(st.mapping):
             e = page_entries.get(pid)
             page = Page.parse(self.tree.read(e)) if e else Page.empty()
-            page.author_index = author_index
             if pid in rotated_pages:
                 old_box, rot = rotated_pages[pid]
                 page.transform_all(lambda x, y, b=old_box, r=rot: rotate_rm_point(x, y, b, r))
@@ -603,9 +607,6 @@ class Engine:
                     self.state.event("warning", "A tablet page uses a format the service can't safely edit, so Zotero annotations weren't added to it.", att_key)
                     continue
                 tablet_files[f"/{pid}.rm"] = ctx.page.to_bytes()
-        if any(name.endswith(".rm") for name in tablet_files):
-            # the tablet ignores page edits by authors the document doesn't list
-            new_content, _ = tc.register_author(new_content, str(SERVICE_AUTHOR))
         content_changed = new_content != doc.content
         if tablet_files or content_changed:
             self.tree.stage(doc.id, files=tablet_files, content=new_content if content_changed else None)

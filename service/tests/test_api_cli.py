@@ -122,3 +122,15 @@ def test_check_commands(tmp_path, monkeypatch, capsys):
     # step 3
     assert cli.main(["--config", str(conf), "check-tablet", "--verify"]) == 0
     assert "✓ The tablet kept" in capsys.readouterr().out
+
+
+def test_debug_page(tmp_path, monkeypatch, capsys):
+    from rmzotero import cli
+
+    z, files, cloud = MemoryZotero(7), MemoryFiles(), MemoryCloud()
+    monkeypatch.setattr(cli, "_clients", lambda cfg: (z, files, cloud))
+    conf = tmp_path / "c.toml"
+    conf.write_text(f'data_dir = "{tmp_path / "data"}"\n')
+    cli.main(["--config", str(conf), "check-tablet"])
+    assert cli.main(["--config", str(conf), "debug-page", "rmzotero check"]) == 2  # never opened: no page list
+    assert "formatVersion" in capsys.readouterr().out

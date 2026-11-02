@@ -49,16 +49,34 @@ def test_transform_all():
     assert (m.value.points[0].x, m.value.points[0].y) == (-2, 1)
 
 
-def test_service_registers_as_a_document_author():
-    from rmzotero.tablet import content as tc
+
+def test_service_writes_as_the_pages_device_author_above_all_its_ids():
     from rmzotero.tablet.scene import SERVICE_AUTHOR
 
-    c = tc.new_pdf_content(1)
-    c["cPages"]["uuids"] = [{"first": "11111111-2222-3333-4444-555555555555", "second": 1}]
-    c2, idx = tc.register_author(c, str(SERVICE_AUTHOR))
-    assert idx == 2 and c2["cPages"]["uuids"][-1] == {"first": str(SERVICE_AUTHOR), "second": 2}
-    assert tc.register_author(c2, str(SERVICE_AUTHOR)) == (c2, 2)  # idempotent
     page = Page.empty()
-    page.author_index = 2
-    [i] = page.add(page.zotero_layer_id(), [line([(0, 0), (1, 1)])])
-    assert i.startswith("2:")
+    [a] = page.add(page.first_user_layer_id(), [line([(0, 0), (1, 1)])])
+    device = min(next(b for b in page.blocks if type(b).__name__ == "AuthorIdsBlock").author_uuids)
+    z = page.zotero_layer_id()
+    [b] = page.add(z, [line([(2, 2), (3, 3)])])
+    authors = next(bl for bl in page.blocks if type(bl).__name__ == "AuthorIdsBlock").author_uuids
+    assert SERVICE_AUTHOR not in authors.values() and len(authors) == 1
+    assert a.split(":")[0] == b.split(":")[0] == str(device)
+    # every new id is above every id or timestamp already in the page (labels' timestamps included)
+    from rmzotero.tablet.scene import _crdt_ids
+
+    again = Page.parse(page.to_bytes())
+    ids = [c for c in _crdt_ids(again.blocks) if c.part1 == device]
+    assert len(set((c.part1, c.part2) for c in ids if c.part2 > 0)) > 3
+
+
+def test_legacy_page_lists():
+    from rmzotero.tablet import content as tc
+
+    legacy = {"formatVersion": 1, "pages": ["a", "b", "note"], "redirectionPageMap": [0, 1, -1], "pageCount": 3}
+    assert tc.is_legacy(legacy)
+    refs = tc.pages(legacy)
+    assert [(r.id, r.redir) for r in refs] == [("a", 0), ("b", 1), ("note", None)]
+    gone = tc.set_deleted(legacy, "b", True)
+    assert gone["pages"] == ["a", "note"] and gone["redirectionPageMap"] == [0, -1] and gone["pageCount"] == 2
+    back = tc.set_deleted(gone, "b", False, index=1, redir=1)
+    assert back["pages"] == legacy["pages"] and back["redirectionPageMap"] == legacy["redirectionPageMap"]

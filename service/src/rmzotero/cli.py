@@ -156,7 +156,7 @@ def cmd_check_tablet(cfg: Config, args) -> int:
     from .pdf.simple import text_pdf
     from .pdf.text import TextLayer, line_rects
     from .tablet import content as tc
-    from .tablet.scene import SERVICE_AUTHOR, Page
+    from .tablet.scene import Page
     from .tablet.tree import TRASH, BlobCache, CloudTree, new_metadata
 
     _z, _f, cloud = _clients(cfg)
@@ -219,14 +219,12 @@ def cmd_check_tablet(cfg: Config, args) -> int:
         chars = TextLayer(pdf).chars(0)
         start = "".join(c.text for c in chars).index("Highlighted")
         hl_rect = box.user_rect_to_rm(line_rects(chars[start:start + 11])[0])
-        content, author_index = tc.register_author(doc.content, str(SERVICE_AUTHOR))
-        page.author_index = author_index
         zl = page.zotero_layer_id()
         page.add(zl, [
             si.Line(si.PenColor.BLACK, si.Pen.FINELINER_2, [si.Point(x, y, 0, 0, 12, 100) for x, y in [(-300, 600), (300, 600), (300, 900), (-300, 900), (-300, 600)]], 1.0, 0.0),
             si.GlyphRange(None, 11, "Highlighted", si.PenColor.HIGHLIGHT, [si.Rectangle(*hl_rect)], color_rgba=(166, 230, 120, 255)),
         ])
-        tree.stage(doc.id, files={f"/{pid}.rm": page.to_bytes()}, content=content if content != doc.content else None)
+        tree.stage(doc.id, files={f"/{pid}.rm": page.to_bytes()})
         if tree.commit():
             print("The tablet changed the document at the same moment; run --annotate again.")
             return 1
@@ -259,6 +257,55 @@ def cmd_check_tablet(cfg: Config, args) -> int:
     return 0 if ok else 1
 
 
+def cmd_debug_page(cfg: Config, args) -> int:
+    """Print the block structure of a tablet page, to compare layers the tablet made with the service's."""
+    from rmscene.scene_stream import (AuthorIdsBlock, SceneGlyphItemBlock, SceneGroupItemBlock, SceneLineItemBlock,
+                                      SceneTreeBlock, TreeNodeBlock)
+
+    from .tablet import content as tc
+    from .tablet.scene import Page
+    from .tablet.tree import BlobCache, CloudTree
+
+    _z, _f, cloud = _clients(cfg)
+    tree = CloudTree(cloud, BlobCache(cfg.data_dir / "blobs"))
+    tree.mirror()
+    docs = [d for d in tree.docs.values() if d.name == args.document and not tree.is_trashed(d.id)]
+    if not docs:
+        print(f"No document named {args.document!r} on the tablet.")
+        return 2
+    doc = docs[0]
+    listed = tc.pages(doc.content)
+    print(f"content: formatVersion={doc.content.get('formatVersion')} cPages={'yes' if (doc.content.get('cPages') or {}).get('pages') else 'no'} pages={len(listed)}")
+    if not 1 <= args.page <= len(listed):
+        print("No such page.")
+        return 2
+    e = doc.page_entries().get(listed[args.page - 1].id)
+    if e is None:
+        print("That page has no writing.")
+        return 0
+    page = Page.parse(tree.read(e))
+    for b in page.blocks:
+        name = type(b).__name__
+        item = getattr(b, "item", None)
+        if isinstance(b, AuthorIdsBlock):
+            info = {k: str(v)[:8] for k, v in b.author_uuids.items()}
+        elif isinstance(b, SceneTreeBlock):
+            info = f"tree={b.tree_id} parent={b.parent_id}"
+        elif isinstance(b, TreeNodeBlock):
+            g = b.group
+            info = f"node={g.node_id} label={g.label.value!r}@{g.label.timestamp} visible={g.visible.value}@{g.visible.timestamp} anchor={g.anchor_id}"
+        elif isinstance(b, (SceneGroupItemBlock, SceneLineItemBlock, SceneGlyphItemBlock)) and item is not None:
+            v = item.value
+            kind = "deleted" if v is None else type(v).__name__
+            info = f"parent={b.parent_id} id={item.item_id} left={item.left_id} right={item.right_id} {kind}"
+            if isinstance(v, si.Line):
+                info += f" tool={v.tool.name} color={v.color.name} points={len(v.points)} thick={v.thickness_scale}"
+        else:
+            info = ""
+        print(f"  {name:22} {info}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="rmzotero", description="Sync a Zotero library with a reMarkable tablet via rmfakecloud.")
     p.add_argument("--config", default=os.environ.get("RMZOTERO_CONFIG", "/config/rmzotero.toml"))
@@ -274,6 +321,9 @@ def main(argv: list[str] | None = None) -> int:
     ct = sub.add_parser("check-tablet", help="check that the tablet accepts pages written by the service")
     ct.add_argument("--annotate", action="store_true", help="step 2: add a Zotero layer to the page you drew on")
     ct.add_argument("--verify", action="store_true", help="step 3: confirm the Zotero layer and your writing survived")
+    dp = sub.add_parser("debug-page", help="print the structure of a tablet page (for troubleshooting)")
+    dp.add_argument("document", help="the document's name on the tablet")
+    dp.add_argument("--page", type=int, default=1)
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     if not args.verbose:
@@ -294,7 +344,7 @@ def main(argv: list[str] | None = None) -> int:
               "in the container's environment to the owner of those files.", file=sys.stderr)
         return 2
     return {"run": cmd_run, "sync-once": cmd_sync_once, "register": cmd_register,
-            "check-zotero": cmd_check_zotero, "check-tablet": cmd_check_tablet}[args.cmd](cfg, args)
+            "check-zotero": cmd_check_zotero, "check-tablet": cmd_check_tablet, "debug-page": cmd_debug_page}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":

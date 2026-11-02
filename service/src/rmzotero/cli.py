@@ -113,7 +113,7 @@ def cmd_check_zotero(cfg: Config, args) -> int:
               "annotationPageLabel": "1", "tags": [{"tag": CHECK_TAG}]}
     objs = [
         {**common, "key": hk, "version": 0, "annotationType": "highlight", "annotationText": "(check)", "annotationColor": "#5fb236",
-         "annotationSortIndex": "00000|000000|00072", "annotationPosition": json.dumps({"pageIndex": 0, "rects": [[72, 700, 300, 714]]})},
+         "annotationSortIndex": "00000|000000|00110", "annotationPosition": json.dumps({"pageIndex": 0, "rects": [[72, 520, 300, 534]]})},
         {**common, "key": ik, "version": 0, "annotationType": "ink", "annotationColor": "#ff6666", "annotationSortIndex": "00000|000000|00100",
          "annotationPosition": json.dumps({"pageIndex": 0, "width": 2, "paths": [[100, 600, 150, 650, 200, 600, 250, 650]]})},
     ]

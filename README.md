@@ -94,6 +94,10 @@ Expose port 8787 through your existing tunnel or reverse proxy **with HTTPS**, t
 
 Download `rmzotero.xpi` from the [latest release](https://github.com/zsrobinson/rmproxy-zotero/releases/latest). In Zotero: Tools → Plugins → ⚙ → Install Plugin From File… → `rmzotero.xpi`. Zotero updates it automatically after that. Then Settings → reMarkable: enter the service address and token, press **Connect**, choose collections, **Save**.
 
+### If the container keeps restarting
+
+Check its log. A *permission denied* message means the container can't read `rmzotero.toml` or write the data folder. The container runs as whoever owns the `rmzotero/data` folder on the NAS. Make sure that's the same account that owns the config, or set `PUID`/`PGID` in the container's environment (Synology: `id <your-user>` over SSH shows the numbers, usually 1026/100).
+
 ### Updating
 
 ```sh

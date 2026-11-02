@@ -201,8 +201,20 @@ def main(argv: list[str] | None = None) -> int:
     ct.add_argument("--verify", action="store_true", help="verify after drawing on the check document")
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    cfg = Config.load(args.config)
-    cfg.data_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        cfg = Config.load(args.config)
+        cfg.data_dir.mkdir(parents=True, exist_ok=True)
+        probe = cfg.data_dir / ".write-test"
+        probe.write_text("ok")
+        probe.unlink()
+    except FileNotFoundError as e:
+        print(f"rmzotero: {e.filename} not found. Put rmzotero.toml in the folder mounted at /config.", file=sys.stderr)
+        return 2
+    except PermissionError as e:
+        print(f"rmzotero: permission denied for {e.filename} (running as uid {os.getuid()}, gid {os.getgid()}).\n"
+              "Make the config readable and the data folder writable by that user, or set PUID/PGID "
+              "in the container's environment to the owner of those files.", file=sys.stderr)
+        return 2
     return {"run": cmd_run, "sync-once": cmd_sync_once, "register": cmd_register,
             "check-zotero": cmd_check_zotero, "check-tablet": cmd_check_tablet}[args.cmd](cfg, args)
 

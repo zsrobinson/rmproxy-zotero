@@ -13,4 +13,6 @@ services:
     ports:
       - "8787:8787"                      # the plugin API; put it behind your tunnel/reverse proxy with HTTPS
     # environment:
+    #   PUID: "1026"                      # run as this user/group; default: the owner of ./rmzotero/data
+    #   PGID: "100"
     #   RMZOTERO_OCR_LANGUAGE: "eng+deu"  # tesseract languages (only English is in the image)

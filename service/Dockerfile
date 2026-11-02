@@ -12,13 +12,14 @@ COPY pyproject.toml ./
 COPY src ./src
 RUN pip install --no-cache-dir .
 
-RUN useradd --system --uid 1000 --home /data rmzotero && mkdir -p /data /config && chown rmzotero /data
-USER rmzotero
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN mkdir -p /data /config
+# Starts as root, then drops to the owner of /data (or PUID/PGID): see entrypoint.sh.
 VOLUME ["/data"]
 ENV RMZOTERO_CONFIG=/config/rmzotero.toml \
     RMZOTERO_DATA_DIR=/data \
     PYTHONUNBUFFERED=1
 EXPOSE 8787
 HEALTHCHECK --interval=60s --timeout=5s CMD python -c "import urllib.request,sys; urllib.request.urlopen('http://127.0.0.1:8787/api/health', timeout=4)" || exit 1
-ENTRYPOINT ["rmzotero"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["run"]

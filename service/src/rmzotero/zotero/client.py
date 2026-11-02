@@ -173,7 +173,12 @@ class MemoryZotero:
         for o in objects:
             key = o.get("key") or new_key()
             cur = self.objects.get(key)
-            if cur is not None and "version" in o and int(o["version"]) != cur["version"]:
+            # like api.zotero.org: writes that name a key must say which version they expect (0 = new)
+            if "key" in o and "version" not in o:
+                res.failed[key] = "428: Either If-Unmodified-Since-Version or 'version' property must be provided for 'key'-based writes"
+                continue
+            expected = int(o.get("version", 0))
+            if (cur is None and expected != 0) or (cur is not None and expected != cur["version"]):
                 res.conflicts.add(key)
                 continue
             if o.get("itemType") == "annotation":

@@ -221,7 +221,7 @@ class Engine:
     def _create_attachment(self, source: dict, title: str, filename: str, data: bytes, tag: str) -> str:
         key = new_key()
         obj = {
-            "key": key, "itemType": "attachment", "linkMode": "imported_file", "title": title, "contentType": "application/pdf",
+            "key": key, "version": 0, "itemType": "attachment", "linkMode": "imported_file", "title": title, "contentType": "application/pdf",
             "charset": "", "filename": filename, "md5": None, "mtime": None, "note": "",
             "tags": [{"tag": tag}], "relations": {"dc:relation": [f"http://zotero.org/users/{self.zotero.user_id}/items/{source['key']}"]},
         }
@@ -610,7 +610,7 @@ class Engine:
         for k, a in reindex.items():
             if k not in updates and k not in {d for d, _ in res.deletes}:
                 updates[k] = a
-        objects = [{**d, "parentItem": att_key} for d in res.creates] + [
+        objects = [{**d, "parentItem": att_key, "version": 0} for d in res.creates] + [
             {k: v for k, v in d.items() if k not in ("dateModified", "dateAdded")} for d in updates.values()]
         written: dict[str, int] = {}
         failed: set[str] = set()

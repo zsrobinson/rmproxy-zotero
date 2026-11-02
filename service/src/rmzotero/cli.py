@@ -99,9 +99,9 @@ def cmd_check_zotero(cfg: Config, args) -> int:
     common = {"itemType": "annotation", "parentItem": att["key"], "annotationComment": "Written by rmzotero check-zotero",
               "annotationPageLabel": "1", "tags": [{"tag": CHECK_TAG}]}
     objs = [
-        {**common, "key": hk, "annotationType": "highlight", "annotationText": "(check)", "annotationColor": "#5fb236",
+        {**common, "key": hk, "version": 0, "annotationType": "highlight", "annotationText": "(check)", "annotationColor": "#5fb236",
          "annotationSortIndex": "00000|000000|00072", "annotationPosition": json.dumps({"pageIndex": 0, "rects": [[72, 700, 300, 714]]})},
-        {**common, "key": ik, "annotationType": "ink", "annotationColor": "#ff6666", "annotationSortIndex": "00000|000000|00100",
+        {**common, "key": ik, "version": 0, "annotationType": "ink", "annotationColor": "#ff6666", "annotationSortIndex": "00000|000000|00100",
          "annotationPosition": json.dumps({"pageIndex": 0, "width": 2, "paths": [[100, 600, 150, 650, 200, 600, 250, 650]]})},
     ]
     res = zotero.write_items(objs)
@@ -118,6 +118,9 @@ def cmd_check_zotero(cfg: Config, args) -> int:
         back = lib.items.get(o["key"])
         if back is not None:
             print(f"  ✓ read back {o['annotationType']}: page {json.loads(back['annotationPosition'])['pageIndex'] + 1}")
+    if not ok:
+        print("\nZotero refused the annotations; please share the lines above.")
+        return 1
     print("\nNow open this PDF in Zotero (after it syncs). You should see a green highlight near the top of page 1 and a red zig-zag.")
     print("Check that you can recolour or delete them. Remove them afterwards with: rmzotero check-zotero --cleanup")
     return 0 if ok else 1

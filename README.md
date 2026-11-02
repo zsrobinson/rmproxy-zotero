@@ -116,6 +116,19 @@ To see which commit you're running: `docker image inspect ghcr.io/zsrobinson/rmp
 - **On the tablet**: write and highlight as usual. Moves and renames are put back on the next sync, because Zotero owns the organisation. Deleting a document marks it "removed on tablet"; it stays in Zotero and can be sent back.
 - **Timing**: a document syncs once it has been left alone for 2 minutes (`quiet_seconds`), so the service never fights you mid-page.
 
+## Claude connector
+
+Claude can search and organise the library, read your highlights and see your handwriting (ADR 0015). It works from claude.ai on any device.
+
+1. In `rmzotero.toml`, set `[claude] secret` to a long random string (`openssl rand -hex 32`) and `contact_email` (used to find free PDFs via Unpaywall).
+2. Add the `translation-server` service and the `8788` port from the compose snippet, and restart the project.
+3. Expose port 8788 through your reverse proxy with HTTPS, like the plugin API.
+4. In claude.ai: **Settings → Connectors → Add custom connector**, with the URL `https://<that address>/mcp/<secret>`.
+
+Tools: `search_library`, `get_item`, `list_collections`, `get_annotations`, `read_pages`, `view_pages` (page images with your tablet writing), and, after you confirm each one in Claude, `add_items` (from DOIs, ISBNs, arXiv IDs or article URLs, with free PDFs attached), `create_collection`, `file_items`, `add_note`, `edit_item`. Nothing deletes items. Claude never puts things on the tablet directly: filing an item into a synced collection does that.
+
+The URL is the password: keep it private, and change the secret to revoke access.
+
 ## What isn't synced (by design, for now)
 
 - **Comments** on highlights and Zotero **notes** stay in Zotero (ADR 0008).

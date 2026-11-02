@@ -19,7 +19,7 @@ VOLUME ["/data"]
 ENV RMZOTERO_CONFIG=/config/rmzotero.toml \
     RMZOTERO_DATA_DIR=/data \
     PYTHONUNBUFFERED=1
-EXPOSE 8787
+EXPOSE 8787 8788
 HEALTHCHECK --interval=60s --timeout=5s CMD python -c "import urllib.request,sys; urllib.request.urlopen('http://127.0.0.1:8787/api/health', timeout=4)" || exit 1
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["run"]

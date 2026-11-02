@@ -21,6 +21,17 @@ url = "http://rmfakecloud:3000"          # RMFAKECLOUD_URL
 listen = "0.0.0.0:8787"
 token = "change-me-to-a-long-random-string"   # RMZOTERO_API_TOKEN; paste the same token into the Zotero plugin
 
+[claude]
+# The Claude connector (claude.ai → Settings → Connectors → Add custom connector).
+# Its URL is https://<your public address for port 8788>/mcp/<secret>; anyone with the URL can use your library,
+# so make the secret long and random (e.g. `openssl rand -hex 32`). Leave empty to disable the connector.
+secret = ""                     # RMZOTERO_MCP_SECRET
+listen = "0.0.0.0:8788"
+contact_email = ""              # sent to Unpaywall when looking for free PDFs (they ask for an email)
+
+[translation_server]
+url = "http://translation-server:1969"   # the translation-server container from the compose snippet
+
 [sync]
 # Defaults; the plugin can change these later (they're then stored in /data).
 sync_root = "Zotero"            # tablet folder holding the mirror ("" = top level)

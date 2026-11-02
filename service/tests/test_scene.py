@@ -47,3 +47,18 @@ def test_transform_all():
     page.transform_all(lambda x, y: (-y, x))
     [m] = Page.parse(page.to_bytes()).marks()
     assert (m.value.points[0].x, m.value.points[0].y) == (-2, 1)
+
+
+def test_service_registers_as_a_document_author():
+    from rmzotero.tablet import content as tc
+    from rmzotero.tablet.scene import SERVICE_AUTHOR
+
+    c = tc.new_pdf_content(1)
+    c["cPages"]["uuids"] = [{"first": "11111111-2222-3333-4444-555555555555", "second": 1}]
+    c2, idx = tc.register_author(c, str(SERVICE_AUTHOR))
+    assert idx == 2 and c2["cPages"]["uuids"][-1] == {"first": str(SERVICE_AUTHOR), "second": 2}
+    assert tc.register_author(c2, str(SERVICE_AUTHOR)) == (c2, 2)  # idempotent
+    page = Page.empty()
+    page.author_index = 2
+    [i] = page.add(page.zotero_layer_id(), [line([(0, 0), (1, 1)])])
+    assert i.startswith("2:")

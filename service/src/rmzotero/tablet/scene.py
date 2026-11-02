@@ -76,6 +76,9 @@ class Mark:
 class Page:
     def __init__(self, blocks: list[Block]):
         self.blocks = blocks
+        # The author index the document's .content registers for the service (see content.register_author);
+        # when unset, the next free index in this page is used.
+        self.author_index: int | None = None
 
     # -- construction ---------------------------------------------------------
 
@@ -150,7 +153,9 @@ class Page:
         for k, v in ab.author_uuids.items():
             if v == SERVICE_AUTHOR:
                 return k
-        k = max(ab.author_uuids, default=1) + 1
+        k = self.author_index if self.author_index is not None else max(ab.author_uuids, default=1) + 1
+        if k in ab.author_uuids:
+            raise ValueError(f"author index {k} is already used by another device on this page")
         ab.author_uuids[k] = SERVICE_AUTHOR
         return k
 

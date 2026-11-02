@@ -156,7 +156,7 @@ def cmd_check_tablet(cfg: Config, args) -> int:
     from .pdf.simple import text_pdf
     from .pdf.text import TextLayer, line_rects
     from .tablet import content as tc
-    from .tablet.scene import Page
+    from .tablet.scene import SERVICE_AUTHOR, Page
     from .tablet.tree import TRASH, BlobCache, CloudTree, new_metadata
 
     _z, _f, cloud = _clients(cfg)
@@ -219,12 +219,14 @@ def cmd_check_tablet(cfg: Config, args) -> int:
         chars = TextLayer(pdf).chars(0)
         start = "".join(c.text for c in chars).index("Highlighted")
         hl_rect = box.user_rect_to_rm(line_rects(chars[start:start + 11])[0])
+        content, author_index = tc.register_author(doc.content, str(SERVICE_AUTHOR))
+        page.author_index = author_index
         zl = page.zotero_layer_id()
         page.add(zl, [
             si.Line(si.PenColor.BLACK, si.Pen.FINELINER_2, [si.Point(x, y, 0, 0, 12, 100) for x, y in [(-300, 600), (300, 600), (300, 900), (-300, 900), (-300, 600)]], 1.0, 0.0),
             si.GlyphRange(None, 11, "Highlighted", si.PenColor.HIGHLIGHT, [si.Rectangle(*hl_rect)], color_rgba=(166, 230, 120, 255)),
         ])
-        tree.stage(doc.id, files={f"/{pid}.rm": page.to_bytes()})
+        tree.stage(doc.id, files={f"/{pid}.rm": page.to_bytes()}, content=content if content != doc.content else None)
         if tree.commit():
             print("The tablet changed the document at the same moment; run --annotate again.")
             return 1
@@ -275,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     if not args.verbose:
-        for noisy in ("httpx", "httpcore", "pikepdf"):
+        for noisy in ("httpx", "httpcore", "pikepdf", "rmscene"):
             logging.getLogger(noisy).setLevel(logging.WARNING)
     try:
         cfg = Config.load(args.config)

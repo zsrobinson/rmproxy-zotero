@@ -157,3 +157,22 @@ def page_modified_ms(content: dict, page_id: str) -> int:
             except (TypeError, ValueError):
                 return 0
     return 0
+
+
+def register_author(content: dict, author_uuid: str) -> tuple[dict, int]:
+    """Make sure the document lists ``author_uuid`` among its authors (``cPages.uuids``).
+
+    Each device that edits a document's pages appears there with an index, and the
+    pages' items carry that index. The tablet appears to ignore edits by authors the
+    document doesn't list. Returns (content, index); content is unchanged if already listed.
+    """
+    cp = content.get("cPages") or {}
+    uuids = list(cp.get("uuids") or [])
+    for u in uuids:
+        if str(u.get("first", "")).lower() == author_uuid.lower():
+            return content, int(u.get("second"))
+    index = max([int(u.get("second", 0)) for u in uuids] + [1]) + 1
+    out = copy.deepcopy(content)
+    out.setdefault("cPages", {}).setdefault("uuids", [])
+    out["cPages"]["uuids"] = uuids + [{"first": author_uuid, "second": index}]
+    return out, index

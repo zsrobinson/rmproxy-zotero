@@ -73,6 +73,7 @@ class Report:
     trashed: int = 0
     derived: int = 0
     pending: int = 0  # documents waiting for their quiet period
+    paused: bool = False
     errors: list[str] = field(default_factory=list)
     next_due: float | None = None
 
@@ -128,6 +129,10 @@ class Engine:
     def _cycle(self, rep: Report) -> None:
         settings = self.settings
         changed_keys = self.lib.refresh(self.zotero)
+        if settings.paused:
+            # read-only: keep the library mirror fresh for the plugin, change nothing anywhere
+            rep.paused = True
+            return
         self.tree.mirror()
         self._observe(changed_keys)
         rep.derived = self._derive(settings)

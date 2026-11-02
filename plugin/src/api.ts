@@ -11,6 +11,7 @@ export interface EpubTypography {
 }
 
 export interface Settings {
+  paused: boolean;
   sync_root: string;
   excluded_collections: string[];
   pointers: "all" | "none" | "unrelated";
@@ -65,7 +66,7 @@ export interface ItemDetail {
 
 export interface Status {
   version: string;
-  last_report: { finished: number; errors: string[]; uploaded: number; synced_docs: number; pending: number } | null;
+  last_report: { finished: number; errors: string[]; uploaded: number; synced_docs: number; pending: number; paused?: boolean } | null;
   storage: { used_bytes: number; capacity_bytes: number } | null;
   documents: Record<string, number>;
   events: ServiceEvent[];

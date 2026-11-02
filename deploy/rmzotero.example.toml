@@ -34,6 +34,7 @@ url = "http://translation-server:1969"   # the translation-server container from
 
 [sync]
 # Defaults; the plugin can change these later (they're then stored in /data).
+paused = true                   # start paused: choose collections in the plugin, then untick "Pause syncing"
 sync_root = "Zotero"            # tablet folder holding the mirror ("" = top level)
 excluded_collections = []       # collection keys
 pointers = "unrelated"          # all | none | unrelated

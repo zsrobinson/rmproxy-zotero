@@ -87,7 +87,10 @@ async function load(): Promise<void> {
     excluded = new Set(s.excluded_collections);
     const last = status.last_report?.finished ? new Date(status.last_report.finished * 1000).toLocaleString() : "never";
     const docs = Object.entries(status.documents).map(([k, v]) => `${v} ${k}`).join(", ") || "none yet";
-    setStatus(`Connected to rmzotero ${health.version}. Last sync: ${last}. Documents: ${docs}.`);
+    setStatus(s.paused
+      ? `Connected to rmzotero ${health.version}. Syncing is PAUSED: choose collections below, then untick "Pause syncing" and save.`
+      : `Connected to rmzotero ${health.version}. Last sync: ${last}. Documents: ${docs}.`);
+    $("rmz-paused").checked = s.paused;
     $("rmz-root").value = s.sync_root;
     fillSelect("rmz-pointers", [["unrelated", "Only in unrelated collections"], ["all", "In every other collection"], ["none", "Never"]], s.pointers);
     $("rmz-ocr").checked = s.ocr;
@@ -110,6 +113,7 @@ async function load(): Promise<void> {
 async function save(): Promise<void> {
   if (!current) return;
   const patch: Partial<Settings> = {
+    paused: $("rmz-paused").checked,
     sync_root: $("rmz-root").value.trim(),
     pointers: $("rmz-pointers").value,
     ocr: $("rmz-ocr").checked,
@@ -127,7 +131,7 @@ async function save(): Promise<void> {
   };
   try {
     current = await client().saveSettings(patch);
-    setStatus("Saved. Changes apply at the next sync (starting now).");
+    setStatus(current.paused ? "Saved. Syncing is still paused." : "Saved. Syncing now; changes apply within a minute.");
     await client().syncNow();
   } catch (e) {
     setStatus(String((e as Error).message ?? e), true);

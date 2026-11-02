@@ -345,3 +345,18 @@ def test_scanned_reading_gets_a_searchable_copy(tmp_path):
     tablet = Tablet(cloud, tmp_path)
     doc = tablet.doc_named("Vaswani - 2017 - Reading 1")
     assert TextLayer(tablet.tree.read(doc.file(".pdf"))).has_text(0)  # the tablet got the searchable copy
+
+
+def test_paused_service_reads_the_library_but_leaves_the_tablet_alone(world):
+    z, files, cloud, clock, eng, tablet = world
+    ml = z.add_collection("ML")
+    add_paper(z, files, [ml])
+    s = eng.settings
+    s.paused = True
+    save_settings(eng.state, s, s)
+    rep = eng.sync()
+    assert rep.paused and rep.uploaded == 0 and cloud.root_writes == 0
+    assert ml in eng.lib.collections  # the plugin can show collections and sizes meanwhile
+    s.paused = False
+    save_settings(eng.state, s, s)
+    assert eng.sync().uploaded == 1

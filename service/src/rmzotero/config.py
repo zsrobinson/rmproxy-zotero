@@ -28,6 +28,7 @@ class EpubDefaults:
 class Settings:
     """Settings the user can change from the plugin (persisted in the state DB)."""
 
+    paused: bool = False  # keep the service and plugin API running, but leave the tablet alone
     sync_root: str = "Zotero"
     excluded_collections: list[str] = field(default_factory=list)
     pointers: str = "unrelated"  # all | none | unrelated

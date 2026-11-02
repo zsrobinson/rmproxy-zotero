@@ -92,6 +92,10 @@ _Avoid_: smart highlight
 The state of an item whose document the user deleted on the tablet: it stays in its Zotero collections but is no longer sent to the tablet until restored.
 _Avoid_: excluded (reserved for collections), deleted
 
+**Searchable Copy**:
+A copy of a scanned PDF attachment with an invisible text layer added to its text-less pages, stored beside the original and sent to the tablet in its place.
+_Avoid_: OCR'd PDF, OCR version
+
 **Rendition**:
 A PDF generated from an EPUB attachment, laid out to match the tablet's own ebook typography, which is what the tablet actually receives and is marked up.
 _Avoid_: converted PDF, export

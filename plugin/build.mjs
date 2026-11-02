@@ -1,12 +1,24 @@
-// Bundles src/ into the add-on and packages build/rmzotero.xpi. `--test` also builds the unit tests.
+// Bundles src/ into the add-on and packages build/rmzotero.xpi plus build/updates.json.
+//   node build.mjs            build the .xpi (version from PLUGIN_VERSION, else package.json)
+//   node build.mjs --test     also build the unit tests
 import { build } from "esbuild";
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, rmSync, readdirSync } from "node:fs";
+import { cpSync, mkdirSync, rmSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 
+const REPO = "zsrobinson/rmproxy-zotero";
+const ID = "rmzotero@rmproxy-zotero";
 const test = process.argv.includes("--test");
+const version = (process.env.PLUGIN_VERSION || JSON.parse(readFileSync("package.json", "utf8")).version).replace(/^v/, "");
+
 rmSync("build", { recursive: true, force: true });
 mkdirSync("build/addon", { recursive: true });
 cpSync("addon", "build/addon", { recursive: true });
+
+const manifest = JSON.parse(readFileSync("addon/manifest.json", "utf8"));
+manifest.version = version;
+// Zotero checks this for new versions: the updates.json attached to the latest GitHub release.
+manifest.applications.zotero.update_url = `https://github.com/${REPO}/releases/latest/download/updates.json`;
+writeFileSync("build/addon/manifest.json", JSON.stringify(manifest, null, 2));
 
 const common = { bundle: true, target: "firefox115", logLevel: "warning" };
 await build({ ...common, entryPoints: ["src/main.ts"], outfile: "build/addon/content/rmzotero.js", format: "iife", globalName: "RMZotero" });
@@ -17,5 +29,17 @@ if (test) {
   await build({ bundle: true, platform: "node", format: "esm", entryPoints: tests, outdir: "build/test", outExtension: { ".js": ".mjs" }, logLevel: "warning" });
 } else {
   execFileSync("zip", ["-qr", "../rmzotero.xpi", "."], { cwd: "build/addon" });
-  console.log("built build/rmzotero.xpi");
+  const updates = {
+    addons: {
+      [ID]: {
+        updates: [{
+          version,
+          update_link: `https://github.com/${REPO}/releases/download/v${version}/rmzotero.xpi`,
+          applications: { zotero: { strict_min_version: "6.999" } },
+        }],
+      },
+    },
+  };
+  writeFileSync("build/updates.json", JSON.stringify(updates, null, 2));
+  console.log(`built build/rmzotero.xpi (version ${version})`);
 }

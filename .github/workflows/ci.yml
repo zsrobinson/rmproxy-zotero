@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  service:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: System tools (pandoc for renditions, tesseract for OCR)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pandoc tesseract-ocr tesseract-ocr-eng ghostscript
+      - name: Install
+        run: pip install -e './service[test]' ocrmypdf
+      - name: Test
+        run: pytest service/tests
+
+  plugin:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: plugin/package-lock.json
+      - name: Service (for the plugin's API contract test)
+        run: pip install -e './service[test]'
+      - working-directory: plugin
+        run: npm ci
+      - working-directory: plugin
+        run: npx tsc --noEmit
+      - working-directory: plugin
+        env:
+          SERVICE_PYTHON: python
+        run: npm test
+      - working-directory: plugin
+        run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rmzotero-plugin
+          path: plugin/build/rmzotero.xpi

@@ -1,8 +1,9 @@
 # Add this service to the docker-compose.yml that already runs rmfakecloud.
 # It assumes rmfakecloud's service is called "rmfakecloud" and listens on 3000 inside the network.
+# Update later with: docker compose pull rmzotero && docker compose up -d rmzotero
 services:
   rmzotero:
-    build: ./rmproxy-zotero/service      # path to this repository's service/ folder
+    image: ghcr.io/zsrobinson/rmproxy-zotero:latest
     restart: unless-stopped
     depends_on:
       - rmfakecloud
@@ -12,4 +13,4 @@ services:
     ports:
       - "8787:8787"                      # the plugin API; put it behind your tunnel/reverse proxy with HTTPS
     # environment:
-    #   RMZOTERO_OCR_LANGUAGE: "eng+deu"  # tesseract languages (install extra tesseract-ocr-* packages)
+    #   RMZOTERO_OCR_LANGUAGE: "eng+deu"  # tesseract languages (only English is in the image)

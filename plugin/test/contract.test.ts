@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { test } from "node:test";
 import { ServiceClient, ServiceError, type Requester } from "../src/api";
 
-const PY = "../service/.venv/bin/python";
+const PY = process.env.SERVICE_PYTHON || "../service/.venv/bin/python";
 
 const fetchRequester: Requester = async (method, url, headers, body) => {
   const r = await fetch(url, { method, headers, body: body ?? undefined });

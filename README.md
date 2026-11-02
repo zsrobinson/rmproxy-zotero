@@ -39,20 +39,21 @@ You need rmfakecloud already working with your tablet (yours is), Zotero syncing
 
 ### 1. Deploy the service next to rmfakecloud
 
-On the NAS, in the folder with your rmfakecloud `docker-compose.yml`:
+The image is built by GitHub Actions and published as `ghcr.io/zsrobinson/rmproxy-zotero` (amd64 and arm64). On the NAS, in the folder with your rmfakecloud `docker-compose.yml`:
 
 ```sh
-git clone https://github.com/zsrobinson/rmproxy-zotero
 mkdir -p rmzotero/config rmzotero/data
-cp rmproxy-zotero/deploy/rmzotero.example.toml rmzotero/config/rmzotero.toml
+curl -L -o rmzotero/config/rmzotero.toml https://raw.githubusercontent.com/zsrobinson/rmproxy-zotero/main/deploy/rmzotero.example.toml
 # edit rmzotero/config/rmzotero.toml: Zotero user id + key, WebDAV URL/login, a long random api.token
 ```
 
-Add the service from [`deploy/docker-compose.snippet.yml`](deploy/docker-compose.snippet.yml) to your compose file, then build it:
+Add the service from [`deploy/docker-compose.snippet.yml`](deploy/docker-compose.snippet.yml) to your compose file, then:
 
 ```sh
-docker compose build rmzotero
+docker compose pull rmzotero
 ```
+
+If the repository is private, the image is too: run `docker login ghcr.io` on the NAS first, with your GitHub username and a token that has `read:packages`.
 
 ### 2. Register the service with rmfakecloud
 
@@ -91,11 +92,13 @@ Expose port 8787 through your existing tunnel or reverse proxy **with HTTPS**, t
 
 ### 5. Install the plugin
 
-```sh
-cd plugin && npm ci && npm run build      # produces plugin/build/rmzotero.xpi
-```
+Download `rmzotero.xpi` from the [latest release](https://github.com/zsrobinson/rmproxy-zotero/releases/latest). In Zotero: Tools → Plugins → ⚙ → Install Plugin From File… → `rmzotero.xpi`. Zotero updates it automatically after that. Then Settings → reMarkable: enter the service address and token, press **Connect**, choose collections, **Save**.
 
-In Zotero: Tools → Plugins → ⚙ → Install Plugin From File… → `rmzotero.xpi`. Then Settings → reMarkable: enter the service address and token, press **Connect**, choose collections, **Save**.
+### Updating
+
+```sh
+docker compose pull rmzotero && docker compose up -d rmzotero
+```
 
 ## Using it
 
@@ -115,9 +118,17 @@ In Zotero: Tools → Plugins → ⚙ → Install Plugin From File… → `rmzote
 
 ## Development
 
+GitHub Actions run the tests on every push (`ci.yml`), publish the Docker image from `main` (`docker.yml`), and publish the plugin when a version tag is pushed (`release.yml`):
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0   # → release with rmzotero.xpi, and image tag 0.2.0
+```
+
+Locally:
+
 ```sh
 cd service && python -m venv .venv && .venv/bin/pip install -e '.[test]' && .venv/bin/pytest
-cd plugin && npm ci && npx tsc --noEmit && npm test
+cd plugin && npm ci && npx tsc --noEmit && npm test && npm run build   # → build/rmzotero.xpi
 ```
 
 The service tests run everything end to end against in-memory Zotero, WebDAV and rmfakecloud, plus a simulated tablet. `tests/test_rmfakecloud_live.py` runs the same flow against a real rmfakecloud:

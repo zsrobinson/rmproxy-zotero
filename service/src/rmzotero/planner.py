@@ -43,7 +43,7 @@ class DesiredPointer:
 @dataclass
 class Derivation:
     source_key: str
-    kind: str  # "rendition" (EPUB) or "ocr-check" (PDF)
+    kind: str  # "ocr-check" (PDF); EPUB editions are made on request, not planned
 
 
 @dataclass
@@ -142,8 +142,7 @@ def plan(lib: Library, settings: Settings, state: State) -> Plan:
             if a.get("contentType") == "application/epub+zip":
                 key = derived.get((a["key"], "rendition"), "missing")
                 if key == "missing":
-                    p.pending.append(Derivation(a["key"], "rendition"))
-                    continue
+                    continue  # no tablet edition yet: one is made only when asked for, from the plugin (ADR 0016)
                 synced.append((a, key or a["key"], "rendition" if key else "epub"))  # None = fixed layout/DRM-free original
             else:
                 if settings.ocr:

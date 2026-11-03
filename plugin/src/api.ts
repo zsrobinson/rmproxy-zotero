@@ -1,6 +1,19 @@
 // Client for the rmzotero service's HTTP API.
 
-export type DocState = "synced" | "pending" | "removed" | "archived" | "trashed" | "error" | "not_synced";
+export type DocState = "synced" | "pending" | "typesetting" | "removed" | "archived" | "trashed" | "error" | "not_synced";
+
+/** A tablet edition being made (or made recently) from an EPUB. */
+export interface EditionJob {
+  key: string; // the EPUB attachment
+  item_key?: string;
+  title?: string;
+  status: "queued" | "working" | "done" | "failed";
+  stage: string | null;
+  progress: number | null; // 0-100, null once failed
+  message: string | null;
+  result_key: string | null;
+  finished_at: number | null;
+}
 
 export interface EpubTypography {
   font: string;
@@ -40,6 +53,9 @@ export interface AttachmentInfo {
   source_key: string | null;
   typography: Partial<EpubTypography> | null;
   state: DocState;
+  epub?: boolean;
+  typography_effective?: EpubTypography;
+  edition?: EditionJob | null;
   name?: string;
   location?: string | null;
   kind?: string;
@@ -174,6 +190,13 @@ export class ServiceClient {
   }
   setTypography(sourceKey: string, typography: Partial<EpubTypography> | null) {
     return this.call<{ ok: boolean }>("PUT", `/api/attachments/${sourceKey}/typography`, typography ?? {});
+  }
+  makeEditions(keys: string[], typography?: Partial<EpubTypography>) {
+    return this.call<{ queued: { key: string; item_key: string; already_running: boolean }[]; skipped: { key: string; reason: string }[] }>(
+      "POST", "/api/editions", { keys, typography: typography ?? null });
+  }
+  async editions(): Promise<EditionJob[]> {
+    return (await this.call<{ editions: EditionJob[] }>("GET", "/api/editions")).editions;
   }
   syncNow() {
     return this.call<{ ok: boolean }>("POST", "/api/sync");

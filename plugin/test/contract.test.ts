@@ -41,6 +41,10 @@ test("plugin client speaks the service API", { skip: !existsSync(PY) }, async ()
     assert.equal((await c.itemsStatus([info.item]))[info.item], "removed");
     assert.equal((await c.restore(info.att)).ok, true);
     assert.equal((await c.setTypography(info.att, { font: "Noto Serif" })).ok, true);
+    const ed = await c.makeEditions([info.item]);
+    assert.deepEqual(ed.queued, []);
+    assert.equal(ed.skipped[0].reason, "no EPUB");
+    assert.deepEqual(await c.editions(), []);
   } finally {
     proc.kill();
   }

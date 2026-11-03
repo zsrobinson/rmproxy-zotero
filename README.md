@@ -2,12 +2,12 @@
 
 Keep a Zotero library and a reMarkable 2 in step, through your self-hosted rmfakecloud:
 
-- your library's PDFs and EPUBs appear on the tablet, in folders that mirror your Zotero collections;
+- your library's PDFs appear on the tablet, in folders that mirror your Zotero collections, and so do EPUBs once you've made their tablet edition;
 - what you write on the tablet shows up in Zotero as native annotations: highlights with their text, pen strokes as ink;
 - what you annotate in Zotero shows up on the tablet, on its own "Zotero" layer;
 - page edits made on either side (note pages inserted on the tablet; pages deleted or rotated in Zotero) carry across.
 
-Primary use cases: **class readings and papers** (often scanned; a searchable copy is made automatically) and **books for personal reading** (EPUBs are typeset into tablet-sized PDFs with the tablet's own fonts and text settings).
+Primary use cases: **class readings and papers** (often scanned; a searchable copy is made automatically) and **books for personal reading** (EPUBs are typeset on request into tablet-sized PDFs with the tablet's own fonts and text settings).
 
 Design notes: [GLOSSARY.md](GLOSSARY.md), decisions in [docs/adr/](docs/adr/), and the [working assumptions](docs/assumptions.md) that still need checking on real hardware.
 
@@ -110,9 +110,10 @@ To see which commit you're running: `docker image inspect ghcr.io/zsrobinson/rmp
 
 ## Using it
 
-- **Item list**: right-click the column header → enable "reMarkable". ✓ on tablet · ↻ syncing · ⊘ removed on tablet · ☁ archived · ⚠ problem.
-- **Item pane → reMarkable**: where the document lives on the tablet, annotation counts, *Send to tablet again* / *Remove from tablet*, the folder used when the item is in several collections, and text settings for EPUB tablet editions.
-- **Right-click items**: Sync now, Send to reMarkable again, Remove from reMarkable.
+- **Item list**: right-click the column header → enable "reMarkable". ✓ on tablet · ↻ syncing · ⏳ making a tablet edition · ⊘ removed on tablet · ☁ archived · ⚠ problem.
+- **Item pane → reMarkable**: where the document lives on the tablet, annotation counts, *Send to tablet again* / *Remove from tablet*, the folder used when the item is in several collections, and for an EPUB, *Make tablet edition* with its text settings.
+- **Right-click items**: Sync now, Make reMarkable edition (EPUBs, with each book's text settings), Send to reMarkable again, Remove from reMarkable.
+- **EPUBs**: only go to the tablet once you've made a tablet edition: a PDF typeset like the tablet's own ebook view, added to the item next to the EPUB. A progress window follows it (usually 10–30 seconds); open the PDF in Zotero to check it. Making a new edition replaces the old one unless you've written on it.
 - **On the tablet**: write and highlight as usual. Moves and renames are put back on the next sync, because Zotero owns the organisation. Deleting a document marks it "removed on tablet"; it stays in Zotero and can be sent back.
 - **Timing**: a document syncs once it has been left alone for 2 minutes (`quiet_seconds`), so the service never fights you mid-page.
 

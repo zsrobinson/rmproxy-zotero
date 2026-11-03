@@ -6,3 +6,4 @@ rmzotero-column = reMarkable
 rmzotero-menu-sync = Sync with reMarkable now
 rmzotero-menu-restore = Send to reMarkable again
 rmzotero-menu-remove = Remove from reMarkable
+rmzotero-menu-edition = Make reMarkable edition (EPUB)

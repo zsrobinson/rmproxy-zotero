@@ -144,3 +144,26 @@ def test_diagnostics_command_falls_back_when_service_is_down(tmp_path, capsys):
     assert cli.main(["--config", str(conf), "diagnostics"]) == 1
     out = capsys.readouterr()
     assert "isn't answering" in out.err and '"stored_only": true' in out.out
+
+
+def test_tablet_edition_requests_and_progress(api):
+    a, eng, z, item, att, ml, other = api
+    book = z.add_item({"itemType": "book", "title": "A Novel", "collections": [ml]})
+    epub = z.add_item({"itemType": "attachment", "parentItem": book, "linkMode": "imported_file",
+                       "contentType": "application/epub+zip", "title": "EPUB", "filename": "n.epub"})
+    eng.lib.refresh(z)
+    # the EPUB is listed with its own action and the settings its edition would use
+    _, d = call(a, "GET", f"/api/items/{book}")
+    [row] = d["attachments"]
+    assert row["epub"] and row["state"] == "not_synced" and row["edition"] is None
+    assert row["typography_effective"]["font"] == eng.settings.epub.font
+    # asking for editions: items without an EPUB are skipped, not errors
+    code, res = call(a, "POST", "/api/editions", {"keys": [book, item], "typography": {"font": "Noto Sans", "bogus": 1, "margins": None}})
+    assert code == 200 and [q["key"] for q in res["queued"]] == [epub] and res["skipped"] == [{"key": item, "reason": "no EPUB"}]
+    assert eng._typography(epub, eng.settings).font == "Noto Sans"
+    _, s = call(a, "POST", "/api/items/status", {"keys": [book, epub, item]})
+    assert s["status"][book] == "typesetting" and s["status"][epub] == "typesetting" and s["status"][item] == "synced"
+    _, res = call(a, "GET", "/api/editions")
+    assert res["editions"][0]["status"] == "queued" and res["editions"][0]["item_key"] == book
+    _, d = call(a, "GET", f"/api/items/{book}")
+    assert d["attachments"][0]["edition"]["status"] == "queued"

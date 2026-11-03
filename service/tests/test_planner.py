@@ -68,7 +68,8 @@ def test_derivations_pending_then_used():
     epub = z.add_item({"itemType": "attachment", "parentItem": item, "linkMode": "imported_file", "contentType": "application/epub+zip", "title": "EPUB"})
     scan = pdf(z, item, "Scan")
     lib, state, p = build(z, Settings())
-    assert {(d.source_key, d.kind) for d in p.pending} == {(epub, "rendition"), (scan, "ocr-check")}
+    assert {(d.source_key, d.kind) for d in p.pending} == {(scan, "ocr-check")}  # EPUB editions are made on request
+    assert epub not in p.docs
     assert p.docs == {}
     rendition = z.add_item({"itemType": "attachment", "parentItem": item, "linkMode": "imported_file", "contentType": "application/pdf", "title": "EPUB (tablet edition)"})
     lib.refresh(z)

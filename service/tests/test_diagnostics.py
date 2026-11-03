@@ -21,7 +21,7 @@ def test_failures_back_off_and_retry_when_inputs_change(tmp_path):
     assert f.all() == []
 
 
-def test_broken_epub_is_not_retried_every_cycle(world):  # noqa: F811
+def test_broken_epub_fails_its_edition_once_and_says_why(world):  # noqa: F811
     z, files, cloud, clock, eng, tablet = world
     book = z.add_item({"itemType": "book", "title": "Broken Book", "collections": [z.add_collection("Novels")]})
     epub = z.add_item({"itemType": "attachment", "parentItem": book, "linkMode": "imported_file",
@@ -32,16 +32,18 @@ def test_broken_epub_is_not_retried_every_cycle(world):  # noqa: F811
     original = eng._make_rendition
     eng._make_rendition = lambda *a, **k: (calls.append(1), original(*a, **k))
     eng.sync()
-    assert len(calls) == 1
-    rep = eng.sync()
-    assert len(calls) == 1 and rep.backed_off == 1  # waiting out its backoff
-    d = collect(eng)
-    [fail] = d["failures"]
-    assert fail["item"] == "Broken Book" and fail["kind"] == "rendition" and fail["attempts"] == 1 and "traceback_tail" in fail
-    clock.advance(BACKOFF_FIRST + 1)
+    assert calls == []  # nothing happens until asked
+    eng.request_edition(epub)
     eng.sync()
-    assert len(calls) == 2  # retried after the backoff
-    assert collect(eng)["failures"][0]["attempts"] == 2
+    eng.sync()
+    assert len(calls) == 1  # a failed edition isn't retried by itself
+    [job] = eng.editions()
+    assert job["status"] == "failed" and "not a valid EPUB" in job["message"] and job["progress"] is None
+    d = collect(eng)
+    assert d["queue"]["tablet_editions"][0]["status"] == "failed" and "Tablet edition of Broken Book: failed" in format_text(d)
+    eng.request_edition(epub)  # asking again retries it
+    eng.sync()
+    assert len(calls) == 2
 
 
 def test_diagnostics_report_and_endpoints(world, tmp_path):  # noqa: F811

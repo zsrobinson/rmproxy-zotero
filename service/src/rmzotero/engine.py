@@ -2,7 +2,8 @@
 
 A cycle:
 1. refresh the Zotero mirror and the tablet tree, noting which documents changed;
-2. make derived attachments that are due (EPUB renditions, searchable copies);
+2. make the tablet editions of EPUBs that were asked for, and the derived attachments that
+   are due (searchable copies of scans);
 3. plan the tablet from the library and apply organisation: folders, new
    documents, names and places, removals, pointers (one tablet commit);
 4. for each document that changed on either side and has been quiet long
@@ -44,6 +45,16 @@ from .zotero.webdav import FileMissing, FileStore
 log = logging.getLogger(__name__)
 
 MAX_DERIVATIONS_PER_CYCLE = 4
+MAX_EDITIONS_PER_CYCLE = 3  # the rest wait a cycle, so a big batch doesn't hold up syncing
+EDITION_FRESH_SECONDS = 600  # finished edition jobs are reported to the plugin for this long
+# how far along an edition is, for the plugin's progress indicator
+EDITION_STAGES = {"waiting": 0, "reading the EPUB": 10, "typesetting": 30, "adding to Zotero": 85, "done": 100}
+
+
+def _item_title(lib: Library, key: str) -> str:
+    it = lib.items.get(key) or {}
+    parent = lib.items.get(it.get("parentItem") or "") or {}
+    return parent.get("title") or it.get("title") or key
 
 
 def explain(e: Exception) -> str:
@@ -112,6 +123,8 @@ class Engine:
         self.started_at = clock()
         self.activity = Activity(clock)
         self.failures = Failures(state, clock)
+        # EPUB editions used to be made automatically, with retries; they're on request now (ADR 0016)
+        state.exec("DELETE FROM failures WHERE kind='rendition'")
 
     # ------------------------------------------------------------------------------------------
     @property
@@ -146,6 +159,10 @@ class Engine:
         doing = self.activity.doing
         with doing("zotero refresh"):
             changed_keys = self.lib.refresh(self.zotero)
+        if self._editions_waiting():
+            # asked for from Zotero, and only touches Zotero: done even while paused
+            with doing("tablet editions"):
+                self._make_editions(settings)
         if settings.paused:
             # read-only: keep the library mirror fresh for the plugin, change nothing anywhere
             rep.paused = True
@@ -220,17 +237,11 @@ class Engine:
 
     def _derivation_fingerprint(self, source_key: str, kind: str, settings: Settings) -> str:
         att = self.lib.items.get(source_key) or {}
-        extra = f"{rend.params_hash(self._typography(source_key, settings))}|r{rend.RENDERER_VERSION}" if kind == "rendition" else ""
-        return f"{att.get('md5') or att.get('version')}|{extra}"
+        return f"{att.get('md5') or att.get('version')}|"
 
     def _derive(self, settings: Settings, rep: Report | None = None) -> int:
         plan = planner.plan(self.lib, settings, self.state)
         pending = list(plan.pending)
-        # renditions whose typography changed
-        for r in self.state.all("SELECT * FROM derived WHERE kind='rendition' AND derived_key IS NOT NULL"):
-            params = json.loads(r["params"] or "{}")
-            if r["source_key"] in self.lib.items and params.get("typography") != rend.params_hash(self._typography(r["source_key"], settings)):
-                pending.append(planner.Derivation(r["source_key"], "rendition"))
         done = 0
         ready = []
         for d in pending:
@@ -244,11 +255,8 @@ class Engine:
             title = (self.lib.items.get(d.source_key) or {}).get("title") or d.source_key
             fp = self._derivation_fingerprint(d.source_key, d.kind, settings)
             try:
-                with self.activity.doing("conversions", f"{'typesetting EPUB' if d.kind == 'rendition' else 'checking for scanned pages'}: {title}"):
-                    if d.kind == "rendition":
-                        self._make_rendition(d.source_key, settings)
-                    else:
-                        self._check_ocr(d.source_key)
+                with self.activity.doing("conversions", f"checking for scanned pages: {title}"):
+                    self._check_ocr(d.source_key)
                 done += 1
                 self.failures.clear(d.source_key, d.kind)
             except FileMissing as e:
@@ -287,34 +295,126 @@ class Engine:
         self.lib.apply_local_write([{**obj, "version": version, "md5": md5, "mtime": mtime}])
         return key
 
-    def _make_rendition(self, source_key: str, settings: Settings) -> None:
+    def _make_rendition(self, source_key: str, settings: Settings, progress=lambda stage: None) -> tuple[str | None, str]:
+        """Typeset an EPUB into its tablet edition. Returns (edition key or None, a message for the user)."""
         src = self.lib.items[source_key]
+        progress("reading the EPUB")
         _fname, data = self.files.get(source_key)
         info = rend.inspect_epub(data)
         if info.drm:
-            self._set_derived(source_key, "rendition", None, {"skip": "drm"})
-            self.state.event("warning", "This EPUB is DRM-protected, so it can't be sent to the tablet.", source_key)
-            return
+            raise rend.RenditionError("this EPUB is DRM-protected, so it can't be typeset")
         if info.fixed_layout:
             self._set_derived(source_key, "rendition", None, {"fixed": True})
-            self.state.event("info", "Fixed-layout EPUB: sent as-is, without annotation sync.", source_key)
-            return
+            msg = "This EPUB has fixed pages, so it goes to the tablet as it is (without annotation sync)."
+            self.state.event("info", msg, source_key)
+            return None, msg
         typo = self._typography(source_key, settings)
+        progress("typesetting")
         pdf = rend.render_epub(data, typo, pandoc=self.tools.pandoc, font_paths=self.tools.font_paths)
+        progress("adding to Zotero")
         base = (src.get("title") or info.title or "Book").removesuffix(".epub")
         old = self.state.one("SELECT derived_key FROM derived WHERE source_key=? AND kind='rendition'", (source_key,))
         key = self._create_attachment(src, f"{base} (tablet edition)", f"{base} (tablet edition).pdf", pdf, "rmzotero:rendition")
         self._set_derived(source_key, "rendition", key, {"typography": rend.params_hash(typo)})
+        msg = "Tablet edition ready; it goes to the tablet at the next sync."
         old_key = old["derived_key"] if old else None
-        if old_key and old_key in self.lib.items:
+        if old_key and old_key in self.lib.items and not self.lib.items[old_key].get("deleted"):
             has_markup = bool(self.lib.annotations(old_key)) or bool(self.state.links_for(old_key))
             if not has_markup:
                 old_item = self.lib.items[old_key]
                 res = self.zotero.write_items([{"key": old_key, "version": old_item["version"], "deleted": 1}])
                 if old_key in res.versions:
                     self.lib.apply_local_write([{**old_item, "deleted": 1, "version": res.versions[old_key]}])
+                msg = "New tablet edition ready; it replaces the old one at the next sync."
             else:
-                self.state.event("info", "Text settings changed: a new tablet edition was made; the old one keeps its markup.", source_key)
+                msg = "New tablet edition ready. The old one has markup, so it stays too; remove it from the tablet if you don't need it there."
+        self.state.event("info", msg, source_key)
+        return key, msg
+
+    # -- tablet editions of EPUBs (made on request from the plugin, ADR 0016) -------------------------
+    def request_edition(self, source_key: str, typography: dict | None = None) -> bool:
+        """Queue a tablet edition of an EPUB attachment. ``typography`` (if given) becomes the book's own
+        text settings. Returns False if one is already being made."""
+        att = self.lib.items.get(source_key)
+        if not att or att.get("contentType") != "application/epub+zip" or att.get("deleted"):
+            raise ValueError("not an EPUB attachment")
+        if typography is not None:
+            self.set_typography(source_key, typography or None)
+        row = self.state.one("SELECT status FROM editions WHERE source_key=?", (source_key,))
+        if row and row["status"] in ("queued", "working"):
+            return False
+        self.state.upsert("editions", {
+            "source_key": source_key, "status": "queued", "stage": "waiting", "params": json.dumps(typography or {}),
+            "requested_at": self.clock(), "started_at": None, "finished_at": None, "message": None, "result_key": None,
+        }, "source_key")
+        self.wakeup.set()
+        return True
+
+    def _editions_waiting(self) -> bool:
+        return self.state.one("SELECT 1 FROM editions WHERE status IN ('queued', 'working') LIMIT 1") is not None
+
+    def _make_editions(self, settings: Settings) -> int:
+        # 'working' rows are left over from a restart mid-way: start them again
+        rows = self.state.all("SELECT * FROM editions WHERE status IN ('working', 'queued') ORDER BY requested_at")
+        made = 0
+        for row in rows[:MAX_EDITIONS_PER_CYCLE]:
+            key = row["source_key"]
+            title = _item_title(self.lib, key)
+
+            def progress(stage: str, key=key) -> None:
+                self.state.exec("UPDATE editions SET stage=? WHERE source_key=?", (stage, key))
+
+            self.state.exec("UPDATE editions SET status='working', stage='waiting', started_at=? WHERE source_key=?", (self.clock(), key))
+            status, result, message = "failed", None, ""
+            try:
+                if key not in self.lib.items or self.lib.items[key].get("deleted"):
+                    raise ValueError("the EPUB is no longer in the library")
+                with self.activity.doing("tablet editions", title):
+                    result, message = self._make_rendition(key, settings, progress)
+                status = "done"
+                made += 1
+            except FileMissing:
+                message = "The EPUB file isn't on the WebDAV share yet. Let Zotero finish syncing it, then try again."
+            except rend.RenditionError as e:
+                log.warning("tablet edition of %s failed: %s", key, e)
+                message = f"Couldn't typeset this book: {e}"
+            except Exception as e:
+                log.exception("tablet edition of %s failed", key)
+                message = f"Couldn't make the tablet edition: {explain(e)}"
+            if status == "failed":
+                self.state.event("error", message.split("\n")[0], key)
+            self.state.exec("UPDATE editions SET status=?, stage=?, finished_at=?, message=?, result_key=? WHERE source_key=?",
+                            (status, "done" if status == "done" else None, self.clock(), message, result, key))
+        if len(rows) > MAX_EDITIONS_PER_CYCLE:
+            self.wakeup.set()
+        return made
+
+    def editions(self, keys: list[str] | None = None) -> list[dict]:
+        """Edition jobs that are waiting, running or finished recently (for the plugin's progress display)."""
+        now = self.clock()
+        rows = self.state.all("SELECT * FROM editions WHERE status IN ('queued', 'working') OR finished_at > ? ORDER BY requested_at",
+                              (now - EDITION_FRESH_SECONDS,))
+        out = []
+        for r in rows:
+            if keys is not None and r["source_key"] not in keys:
+                continue
+            att = self.lib.items.get(r["source_key"]) or {}
+            stage = r["stage"] or ("done" if r["status"] == "done" else "waiting")
+            out.append({
+                "key": r["source_key"], "item_key": att.get("parentItem") or r["source_key"], "title": _item_title(self.lib, r["source_key"]),
+                "status": r["status"], "stage": stage, "progress": EDITION_STAGES.get(stage, 0) if r["status"] != "failed" else None,
+                "message": r["message"], "result_key": r["result_key"], "requested_at": r["requested_at"],
+                "started_at": r["started_at"], "finished_at": r["finished_at"],
+            })
+        return out
+
+    def edition_job(self, source_key: str) -> dict | None:
+        r = self.state.one("SELECT * FROM editions WHERE source_key=?", (source_key,))
+        if r is None:
+            return None
+        return next(iter(self.editions([source_key])), None) or {
+            "key": source_key, "status": r["status"], "stage": r["stage"], "progress": None, "message": r["message"],
+            "result_key": r["result_key"], "finished_at": r["finished_at"]}
 
     def _check_ocr(self, source_key: str) -> None:
         src = self.lib.items[source_key]
@@ -864,8 +964,8 @@ class Engine:
         self.wakeup.set()
 
     def set_typography(self, source_key: str, params: dict | None) -> None:
+        """The book's own text settings, used for its next tablet edition (nothing is re-made automatically)."""
         if params:
             self.state.upsert("typography", {"att_key": source_key, "params": json.dumps(params)}, "att_key")
         else:
             self.state.exec("DELETE FROM typography WHERE att_key=?", (source_key,))
-        self.wakeup.set()

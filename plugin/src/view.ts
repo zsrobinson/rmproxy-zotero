@@ -1,10 +1,11 @@
 // Pure view logic, shared by the column, the item pane section and the settings pane (unit tested).
 
-import type { AttachmentInfo, CollectionInfo, DocState, EpubTypography, ItemDetail } from "./api";
+import type { AttachmentInfo, CollectionInfo, DocState, EditionJob, EpubTypography, ItemDetail } from "./api";
 
 export const STATE_LABEL: Record<DocState, string> = {
   synced: "On tablet",
   pending: "Syncing…",
+  typesetting: "Making tablet edition…",
   removed: "Removed on tablet",
   archived: "Archived",
   trashed: "Not in scope (in tablet trash)",
@@ -16,6 +17,7 @@ export const STATE_LABEL: Record<DocState, string> = {
 export const STATE_GLYPH: Record<DocState, string> = {
   synced: "✓",
   pending: "↻",
+  typesetting: "⏳",
   removed: "⊘",
   archived: "☁",
   trashed: "",
@@ -91,6 +93,11 @@ export interface SectionModel {
     isRendition: boolean;
     sourceKey: string | null;
     typography: Partial<EpubTypography> | null;
+    isEpub: boolean;
+    hasEdition: boolean;
+    edition: EditionJob | null;
+    editionBusy: boolean;
+    typographyEffective: EpubTypography | null;
   }[];
   homeChoices: { key: string; label: string; selected: boolean }[];
   showHome: boolean;
@@ -117,11 +124,25 @@ export function sectionModel(d: ItemDetail): SectionModel {
       isRendition: a.kind === "rendition",
       sourceKey: a.source_key,
       typography: a.typography,
+      isEpub: !!a.epub,
+      hasEdition: d.attachments.some((b) => b.source_key === a.key && b.key !== a.key),
+      edition: a.edition ?? null,
+      editionBusy: !!a.edition && (a.edition.status === "queued" || a.edition.status === "working"),
+      typographyEffective: a.typography_effective ?? null,
     };
   });
+  for (const r of rows) {
+    if (r.isEpub && r.state === "not_synced") {
+      r.stateLabel = r.editionBusy ? STATE_LABEL.typesetting : r.hasEdition ? "Read on the tablet as its tablet edition" : "Not on tablet until you make a tablet edition";
+    }
+    if (r.isEpub && r.edition?.status === "failed") r.error = r.edition.message;
+  }
   const active = rows.filter((r) => r.state !== "not_synced");
-  const summary = !active.length
-    ? "Not on tablet"
+  const busy = rows.some((r) => r.editionBusy);
+  const summary = busy
+    ? STATE_LABEL.typesetting
+    : !active.length
+    ? rows.some((r) => r.isEpub) ? "EPUB: no tablet edition yet" : "Not on tablet"
     : active.length === 1
       ? `${active[0].stateLabel}${active[0].location ? ` · ${active[0].location}` : ""}`
       : `${active.length} documents on tablet`;
@@ -142,3 +163,18 @@ export const FONTS = ["EB Garamond", "Noto Serif", "Noto Sans", "Noto Sans UI", 
 export const TEXT_SCALES = [0.7, 0.8, 1, 1.2, 1.5, 2];
 export const LINE_HEIGHTS = [100, 150, 200];
 export const MARGINS = [50, 125, 200];
+
+/** One line of the progress window (and item pane) for an edition job. */
+export function editionLine(title: string, job: EditionJob | undefined): { text: string; percent: number; finished: boolean; failed: boolean } {
+  if (!job) return { text: `${title}: waiting…`, percent: 0, finished: false, failed: false };
+  switch (job.status) {
+    case "queued":
+      return { text: `${title}: waiting for the service…`, percent: 0, finished: false, failed: false };
+    case "working":
+      return { text: `${title}: ${job.stage && job.stage !== "waiting" ? job.stage : "starting"}…`, percent: job.progress ?? 0, finished: false, failed: false };
+    case "done":
+      return { text: `${title}: ready${job.result_key ? "" : ` (${job.message ?? ""})`}`, percent: 100, finished: true, failed: false };
+    default:
+      return { text: `${title}: ${(job.message ?? "failed").split("\n")[0]}`, percent: 100, finished: true, failed: true };
+  }
+}

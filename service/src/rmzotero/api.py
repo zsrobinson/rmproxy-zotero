@@ -40,6 +40,8 @@ class Api:
         r("POST", r"/api/attachments/(?P<key>[A-Z0-9]{8})/restore", self.restore)
         r("POST", r"/api/attachments/(?P<key>[A-Z0-9]{8})/remove", self.remove)
         r("PUT", r"/api/attachments/(?P<key>[A-Z0-9]{8})/typography", self.typography)
+        r("POST", r"/api/editions", self.make_editions)
+        r("GET", r"/api/editions", self.list_editions)
         r("POST", r"/api/sync", self.sync_now)
         r("POST", r"/api/restore-removed", self.restore_removed)
 
@@ -160,6 +162,8 @@ class Api:
         }
 
     def _attachment_keys(self, key: str) -> list[str]:
+        """The attachments to show for an item: searchable copies stand in for their scans; an EPUB is
+        listed with its tablet edition, since it has its own action (making the edition)."""
         lib = self.engine.lib
         it = lib.items.get(key)
         if it is None:
@@ -167,16 +171,34 @@ class Api:
         if it.get("itemType") == "attachment":
             keys = [key]
         else:
-            keys = [a["key"] for a in lib.attachments(key)]
+            keys = [a["key"] for a in lib.attachments(key) if not a.get("deleted")]
+        derived: dict[str, list[str]] = {}
+        for r in self.engine.state.all("SELECT * FROM derived WHERE derived_key IS NOT NULL"):
+            derived.setdefault(r["source_key"], []).append(r["derived_key"])
         out = []
-        derived = {r["source_key"]: r["derived_key"] for r in self.engine.state.all("SELECT * FROM derived WHERE derived_key IS NOT NULL")}
         for k in keys:
-            out.append(derived.get(k, k))
+            att = lib.items.get(k) or {}
+            if att.get("contentType") == "application/epub+zip":
+                out += [k, *derived.get(k, [])]
+            else:
+                out += derived.get(k, [k])
         return list(dict.fromkeys(out))
+
+    def _epub_keys(self, key: str) -> list[str]:
+        lib = self.engine.lib
+        it = lib.items.get(key)
+        if it is None:
+            return []
+        atts = [it] if it.get("itemType") == "attachment" else lib.attachments(key)
+        return [a["key"] for a in atts if a.get("contentType") == "application/epub+zip" and not a.get("deleted")]
 
     def items_status(self, payload):
         result = {}
+        busy = {e["key"] for e in self.engine.editions() if e["status"] in ("queued", "working")}
         for key in payload.get("keys", [])[:500]:
+            if busy and busy.intersection(self._epub_keys(key)):
+                result[key] = "typesetting"
+                continue
             infos = [self._doc_info(k) for k in self._attachment_keys(key)]
             states = [i["state"] for i in infos if i["state"] != "not_synced"]
             if not states:
@@ -201,8 +223,13 @@ class Api:
             a = lib.items.get(k, {})
             src = eng.state.one("SELECT source_key FROM derived WHERE derived_key=?", (k,))
             typo = eng.state.one("SELECT params FROM typography WHERE att_key=?", (src["source_key"] if src else k,))
-            atts.append({"key": k, "title": a.get("title"), "source_key": src["source_key"] if src else None,
-                         "typography": json.loads(typo["params"]) if typo else None, **self._doc_info(k)})
+            info = {"key": k, "title": a.get("title"), "source_key": src["source_key"] if src else None,
+                    "typography": json.loads(typo["params"]) if typo else None, **self._doc_info(k)}
+            if a.get("contentType") == "application/epub+zip":
+                info["epub"] = True
+                info["typography_effective"] = eng._typography(k, eng.settings).as_dict()
+                info["edition"] = eng.edition_job(k)
+            atts.append(info)
         pointers = [dict(r) for r in eng.state.all(f"SELECT * FROM pointers WHERE att_key IN ({','.join('?' for _ in atts) or 'NULL'})", [a["key"] for a in atts])]
         return {
             "item": {"key": item_key, "title": item.get("title")},
@@ -231,6 +258,25 @@ class Api:
         params = {k: v for k, v in (payload or {}).items() if k in allowed} or None
         self.engine.set_typography(key, params)
         return {"ok": True}
+
+    def make_editions(self, payload):
+        """Make tablet editions of the EPUBs among ``keys`` (items or attachments), optionally with text settings."""
+        typography = payload.get("typography")
+        if typography is not None:
+            allowed = {"font", "text_scale", "line_height", "margins", "alignment"}
+            typography = {k: v for k, v in typography.items() if k in allowed and v not in (None, "")}
+        queued, skipped = [], []
+        for key in payload.get("keys", [])[:200]:
+            epubs = self._epub_keys(key)
+            if not epubs:
+                skipped.append({"key": key, "reason": "no EPUB"})
+            for k in epubs:
+                started = self.engine.request_edition(k, typography)
+                queued.append({"key": k, "item_key": key, "already_running": not started})
+        return {"queued": queued, "skipped": skipped}
+
+    def list_editions(self, _):
+        return {"editions": self.engine.editions()}
 
     def restore_removed(self, _):
         return {"restored": self.engine.restore_all_removed()}

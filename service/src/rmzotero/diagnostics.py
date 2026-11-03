@@ -167,6 +167,7 @@ def _collect(engine, light: bool = False) -> dict:
         queue["documents_waiting_for_quiet_period"] = quiet[:20]
         queue["documents_not_yet_opened_on_tablet"] = never_opened
         queue["documents_with_errors"] = in_error[:20]
+        queue["tablet_editions"] = [{k: e[k] for k in ("title", "status", "stage", "message")} for e in engine.editions()]
 
     counts = {r["state"]: r["n"] for r in state.all("SELECT state, COUNT(*) AS n FROM docs GROUP BY state")}
     return {
@@ -204,6 +205,9 @@ def format_text(d: dict) -> str:
         lines.append(f"Queue: {q.get('conversions_pending', 0)} conversions pending, {q.get('conversions_waiting_to_retry', 0)} waiting to retry, "
                      f"{len(q.get('documents_waiting_for_quiet_period', []))} documents in their quiet period, "
                      f"{q.get('documents_not_yet_opened_on_tablet', 0)} not yet opened on the tablet")
+        for e in q.get("tablet_editions", []):
+            lines.append(f"  Tablet edition of {e['title']}: {e['status']}" + (f" ({e['stage']})" if e["status"] == "working" else "")
+                         + (f" - {e['message'].splitlines()[0]}" if e["status"] == "failed" and e["message"] else ""))
     lines.append(f"Documents: {d['documents']}; library: {d['library']['items']} items; tablet: {d['tablet']['documents']} documents")
     if d["failures"]:
         lines.append(f"Failures ({len(d['failures'])}):")

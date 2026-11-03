@@ -1,8 +1,8 @@
 // Plugin lifecycle: column, item pane section, context menu, preferences pane.
 
-import { ServiceClient, type DocState, type ItemDetail } from "./api";
+import { ServiceClient, type DocState, type EditionJob, type EpubTypography, type ItemDetail } from "./api";
 import { StatusCache } from "./status";
-import { FONTS, LINE_HEIGHTS, MARGINS, TEXT_SCALES, columnText, sectionModel } from "./view";
+import { FONTS, LINE_HEIGHTS, MARGINS, TEXT_SCALES, columnText, editionLine, sectionModel } from "./view";
 import { prefs, renameTemplate, timers, zoteroRequester } from "./zotero";
 
 const HTML = "http://www.w3.org/1999/xhtml";
@@ -50,6 +50,133 @@ function notify(win: Window, text: string): void {
   } catch {
     win.alert?.(text);
   }
+}
+
+// -- tablet editions: a progress window that follows the service's work ----------------------------------
+
+interface TrackedEdition {
+  key: string;
+  itemKey: string;
+  title: string;
+  line: any | null; // the progress window's ItemProgress
+  finished: boolean;
+  failed: boolean;
+}
+
+/**
+ * Making an edition takes the service 10-30 s. The request returns at once; this follows the jobs
+ * (polling the service) in a Zotero progress window, and the item list shows ⏳ meanwhile.
+ */
+class EditionWatcher {
+  private tracked = new Map<string, TrackedEdition>();
+  private window: any = null;
+  private polling = false;
+
+  track(jobs: { key: string; itemKey: string; title: string }[]): void {
+    if (!this.window || this.allFinished()) this.openWindow();
+    for (const j of jobs) {
+      const prev = this.tracked.get(j.key);
+      if (prev && !prev.finished) continue;
+      const t: TrackedEdition = { ...j, line: null, finished: false, failed: false };
+      try {
+        t.line = new this.window.ItemProgress("attachmentPDF", editionLine(j.title, undefined).text);
+        t.line.setProgress(0);
+      } catch (e) {
+        Zotero.debug(`rmzotero: progress line failed: ${e}`);
+      }
+      this.tracked.set(j.key, t);
+    }
+    cache.invalidate(jobs.map((j) => j.itemKey));
+    if (!this.polling) {
+      this.polling = true;
+      timers().setTimeout(() => void this.poll(), 1500);
+    }
+  }
+
+  private openWindow(): void {
+    this.tracked.clear();
+    try {
+      this.window = new Zotero.ProgressWindow({ closeOnClick: false });
+      this.window.changeHeadline("Making reMarkable tablet editions");
+      this.window.show();
+    } catch (e) {
+      Zotero.debug(`rmzotero: progress window failed: ${e}`);
+      this.window = null;
+    }
+  }
+
+  private allFinished(): boolean {
+    return [...this.tracked.values()].every((t) => t.finished);
+  }
+
+  private async poll(): Promise<void> {
+    let jobs: EditionJob[] = [];
+    try {
+      jobs = await client().editions();
+    } catch (e) {
+      Zotero.debug(`rmzotero: couldn't follow editions: ${e}`);
+    }
+    const byKey = new Map(jobs.map((j) => [j.key, j]));
+    const justFinished: string[] = [];
+    for (const t of this.tracked.values()) {
+      if (t.finished) continue;
+      const job = byKey.get(t.key);
+      const line = editionLine(t.title, job);
+      try {
+        t.line?.setText(line.text);
+        t.line?.setProgress(line.percent);
+        if (line.failed) t.line?.setError();
+      } catch {
+        // the window was closed: keep following for the item list
+      }
+      if (line.finished) {
+        t.finished = true;
+        t.failed = line.failed;
+        justFinished.push(t.itemKey);
+      }
+    }
+    if (justFinished.length) {
+      cache.invalidate(justFinished);
+      // the edition was added through zotero.org: pull it in now rather than at the next automatic sync
+      try {
+        if (!Zotero.Sync?.Runner?.syncInProgress) void Zotero.Sync?.Runner?.sync({ background: true });
+      } catch (e) {
+        Zotero.debug(`rmzotero: couldn't start a Zotero sync: ${e}`);
+      }
+    }
+    if (this.allFinished()) {
+      this.polling = false;
+      const anyFailed = [...this.tracked.values()].some((t) => t.failed);
+      try {
+        this.window?.startCloseTimer(anyFailed ? 30000 : 8000);
+      } catch {
+        // already closed
+      }
+      return;
+    }
+    timers().setTimeout(() => void this.poll(), 2000);
+  }
+}
+
+const editionWatcher = new EditionWatcher();
+
+function itemTitle(key: string): string {
+  try {
+    const it = Zotero.Items.getByLibraryAndKey(Zotero.Libraries.userLibraryID, key);
+    return (it?.parentItem ?? it)?.getDisplayTitle?.() || key;
+  } catch {
+    return key;
+  }
+}
+
+async function makeEditions(win: Window, keys: string[], typography?: Partial<EpubTypography>): Promise<number> {
+  const res = await client().makeEditions(keys, typography);
+  if (!res.queued.length) {
+    notify(win, keys.length === 1 ? "This item has no EPUB." : "None of these items has an EPUB.");
+    return 0;
+  }
+  editionWatcher.track(res.queued.map((q) => ({ key: q.key, itemKey: q.item_key, title: itemTitle(q.item_key) })));
+  return res.queued.length;
 }
 
 async function pushRenameTemplate(): Promise<void> {
@@ -139,22 +266,33 @@ async function renderSection(body: HTMLElement, item: any, setSummary: (s: strin
     if (r.canRestore) button("Send to tablet again", () => c.restore(r.key));
     if (r.canRemove) button("Remove from tablet", () => c.remove(r.key));
     if (actions.childElementCount) row.appendChild(actions);
-    if (r.isRendition && r.sourceKey) {
-      const t = r.typography ?? {};
-      const grid = el(doc, "div", { class: "rmz-grid" });
-      const save = (patch: Record<string, unknown>) => void c.setTypography(r.sourceKey!, { ...t, ...patch }).then(rerender);
-      grid.appendChild(el(doc, "span", { class: "rmz-muted" }, "Font"));
-      grid.appendChild(select(doc, [{ value: "", label: "Default" }, ...FONTS.map((f) => ({ value: f, label: f }))], t.font ?? "", (v) => save({ font: v || undefined })));
-      grid.appendChild(el(doc, "span", { class: "rmz-muted" }, "Size"));
-      grid.appendChild(select(doc, [{ value: "", label: "Default" }, ...TEXT_SCALES.map((s) => ({ value: String(s), label: `${s}×` }))], t.text_scale ? String(t.text_scale) : "", (v) => save({ text_scale: v ? Number(v) : undefined })));
-      grid.appendChild(el(doc, "span", { class: "rmz-muted" }, "Line spacing"));
-      grid.appendChild(select(doc, [{ value: "", label: "Default" }, ...LINE_HEIGHTS.map((s) => ({ value: String(s), label: `${s}%` }))], t.line_height ? String(t.line_height) : "", (v) => save({ line_height: v ? Number(v) : undefined })));
-      grid.appendChild(el(doc, "span", { class: "rmz-muted" }, "Margins"));
-      grid.appendChild(select(doc, [{ value: "", label: "Default" }, ...MARGINS.map((s) => ({ value: String(s), label: String(s) }))], t.margins ? String(t.margins) : "", (v) => save({ margins: v ? Number(v) : undefined })));
-      grid.appendChild(el(doc, "span", { class: "rmz-muted" }, "Alignment"));
-      grid.appendChild(select(doc, [{ value: "", label: "Default" }, { value: "justify", label: "Justified" }, { value: "left", label: "Left" }], t.alignment ?? "", (v) => save({ alignment: v || undefined })));
-      row.appendChild(el(doc, "div", { class: "rmz-muted" }, "Tablet edition text settings (a new edition is made if this one has markup):"));
-      row.appendChild(grid);
+    if (r.isRendition) row.appendChild(el(doc, "div", { class: "rmz-muted" }, "Tablet edition of the EPUB, typeset for the reMarkable."));
+    if (r.isEpub) {
+      if (r.editionBusy) {
+        const line = editionLine("Tablet edition", r.edition ?? undefined);
+        row.appendChild(el(doc, "div", {}, `⏳ ${line.text} (${line.percent}%)`));
+      } else {
+        // the book's text settings, used for the edition made by the button (not saved until then)
+        const chosen: Partial<EpubTypography> = { ...(r.typographyEffective ?? {}) };
+        const grid = el(doc, "div", { class: "rmz-grid" });
+        const field = (label: string, options: { value: string; label: string }[], value: unknown, set: (v: string) => void) => {
+          grid.appendChild(el(doc, "span", { class: "rmz-muted" }, label));
+          grid.appendChild(select(doc, options, value === undefined ? "" : String(value), set));
+        };
+        field("Font", FONTS.map((f) => ({ value: f, label: f })), chosen.font, (v) => (chosen.font = v));
+        field("Size", TEXT_SCALES.map((s) => ({ value: String(s), label: `${s}×` })), chosen.text_scale, (v) => (chosen.text_scale = Number(v)));
+        field("Line spacing", LINE_HEIGHTS.map((s) => ({ value: String(s), label: `${s}%` })), chosen.line_height, (v) => (chosen.line_height = Number(v)));
+        field("Margins", MARGINS.map((s) => ({ value: String(s), label: String(s) })), chosen.margins, (v) => (chosen.margins = Number(v)));
+        field("Alignment", [{ value: "justify", label: "Justified" }, { value: "left", label: "Left" }], chosen.alignment, (v) => (chosen.alignment = v));
+        row.appendChild(grid);
+        const label = r.hasEdition ? "Make a new tablet edition" : "Make tablet edition";
+        button(label, () => makeEditions(doc.defaultView as Window, [r.key], chosen));
+        row.appendChild(actions);
+        if (r.hasEdition) {
+          row.appendChild(el(doc, "div", { class: "rmz-muted" },
+            "A new edition replaces the current one, unless you've written on it (then both are kept)."));
+        }
+      }
     }
     root.appendChild(row);
   }
@@ -167,6 +305,11 @@ async function renderSection(body: HTMLElement, item: any, setSummary: (s: strin
   }
   for (const e of m.events) root.appendChild(el(doc, "div", { class: "rmz-muted" }, e));
   body.replaceChildren(root);
+  if (m.rows.some((r) => r.editionBusy)) {
+    timers().setTimeout(() => {
+      if (body.isConnected && body.firstChild === root) void renderSection(body, item, setSummary);
+    }, 2500);
+  }
 }
 
 // -- context menu -----------------------------------------------------------------------------------
@@ -189,6 +332,9 @@ function addMenu(win: Window): void {
   item("Sync with reMarkable now", async () => {
     await client().syncNow();
     notify(win, "Sync started.");
+  });
+  item("Make reMarkable edition (EPUB)", async () => {
+    await makeEditions(win, itemKeysFor(selectedItems(win)));
   });
   item("Send to reMarkable again", async () => {
     const items = selectedItems(win);

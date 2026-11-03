@@ -277,7 +277,7 @@ def test_first_sync_of_a_large_library_is_one_commit(world):
 
 
 @pytest.mark.skipif(not __import__("shutil").which("pandoc"), reason="pandoc not installed")
-def test_epub_becomes_a_tablet_edition_and_typography_change_respects_markup(world):
+def test_epub_goes_to_the_tablet_once_its_edition_is_made_and_remaking_respects_markup(world):
     import sys
 
     sys.path.insert(0, str(Path(__file__).parent))
@@ -292,6 +292,23 @@ def test_epub_becomes_a_tablet_edition_and_typography_change_respects_markup(wor
     files.put(epub, "novel.epub", make_epub())
     rep = eng.sync()
     assert not rep.errors, rep.errors
+    # nothing is made until asked for
+    assert not [o for o in z.items() if any(t["tag"] == "rmzotero:rendition" for t in o.get("tags", []))]
+    tablet.sync()
+    assert not [d for d in tablet.tree.docs.values() if not d.is_folder]
+
+    stages = []
+    original = eng._make_rendition
+    eng._make_rendition = lambda key, settings, progress: original(key, settings, lambda s: (stages.append(s), progress(s)))
+    assert eng.request_edition(epub)
+    assert not eng.request_edition(epub)  # already waiting
+    [job] = eng.editions()
+    assert job["status"] == "queued" and job["progress"] == 0 and job["title"] == "A Test Novel"
+    rep = eng.sync()
+    assert not rep.errors, rep.errors
+    assert stages == ["reading the EPUB", "typesetting", "adding to Zotero"]
+    [job] = eng.editions()
+    assert job["status"] == "done" and job["progress"] == 100 and job["result_key"] and "ready" in job["message"]
     editions = [o for o in z.items() if any(t["tag"] == "rmzotero:rendition" for t in o.get("tags", []))]
     assert len(editions) == 1 and editions[0]["parentItem"] == book and editions[0]["md5"]
     doc = tablet.doc_named("Lovelace - A Test Novel")
@@ -307,7 +324,11 @@ def test_epub_becomes_a_tablet_edition_and_typography_change_respects_markup(wor
     eng.sync()
     eng.set_typography(epub, {"font": "Noto Sans"})
     clock.advance(500)
+    eng.sync()
+    assert len([o for o in z.items() if any(t["tag"] == "rmzotero:rendition" for t in o.get("tags", [])) and not o.get("deleted")]) == 1
+    eng.request_edition(epub)  # settings only take effect when a new edition is asked for
     rep = eng.sync()
+    assert "has markup" in eng.editions()[0]["message"]
     assert not rep.errors, rep.errors
     editions = [o for o in z.items() if any(t["tag"] == "rmzotero:rendition" for t in o.get("tags", [])) and not o.get("deleted")]
     assert len(editions) == 2

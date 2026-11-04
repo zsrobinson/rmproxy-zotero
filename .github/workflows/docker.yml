@@ -1,6 +1,6 @@
 name: Docker image
 
-# Publishes ghcr.io/<owner>/rmproxy-zotero:latest (and :sha-xxxxxxx) whenever the service changes on main.
+# Publishes ghcr.io/<owner>/rmzotero:latest (and :sha-xxxxxxx) whenever the service changes on main.
 on:
   push:
     branches: [main]

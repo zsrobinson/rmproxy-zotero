@@ -5,8 +5,8 @@ import { build } from "esbuild";
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, rmSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 
-const REPO = "zsrobinson/rmproxy-zotero";
-const ID = "rmzotero@rmproxy-zotero";
+const REPO = "zsrobinson/rmzotero";
+const ID = "rmzotero@zsrobinson.com";
 const test = process.argv.includes("--test");
 const version = (process.env.PLUGIN_VERSION || JSON.parse(readFileSync("package.json", "utf8")).version).replace(/^v/, "");
 

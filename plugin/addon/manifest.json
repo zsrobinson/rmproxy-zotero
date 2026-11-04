@@ -3,15 +3,15 @@
   "name": "reMarkable for Zotero (rmzotero)",
   "version": "0.1.0",
   "description": "Shows and controls how your library syncs with a reMarkable tablet through the rmzotero service.",
-  "author": "rmproxy-zotero",
+  "author": "zsrobinson",
   "icons": {
     "48": "content/icon.svg",
     "96": "content/icon.svg"
   },
   "applications": {
     "zotero": {
-      "id": "rmzotero@rmproxy-zotero",
-      "update_url": "https://github.com/zsrobinson/rmproxy-zotero/releases/latest/download/updates.json",
+      "id": "rmzotero@zsrobinson.com",
+      "update_url": "https://github.com/zsrobinson/rmzotero/releases/latest/download/updates.json",
       "strict_min_version": "6.999",
       "strict_max_version": "8.*"
     }

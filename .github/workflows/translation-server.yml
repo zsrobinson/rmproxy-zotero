@@ -1,0 +1,53 @@
+name: Translation server image
+
+# Builds Zotero's translation-server (https://github.com/zotero/translation-server) for amd64 and arm64
+# and publishes ghcr.io/<owner>/translation-server. Zotero's own Docker Hub image is now arm64-only,
+# which doesn't start on an x86 NAS ("exec format error"). Rebuilt weekly, without cache, so the
+# site translators (cloned fresh by the upstream Dockerfile) stay current.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/translation-server.yml"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: zotero/translation-server
+          path: upstream
+      # The Dockerfile clones the translators itself, so that submodule must stay empty.
+      - name: Fetch the other modules
+        working-directory: upstream
+        run: git submodule update --init --depth 1 modules/utilities modules/translate modules/zotero-schema
+      - id: rev
+        working-directory: upstream
+        run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: upstream
+          platforms: linux/amd64,linux/arm64
+          push: true
+          no-cache: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/translation-server:latest
+            ghcr.io/${{ github.repository_owner }}/translation-server:upstream-${{ steps.rev.outputs.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=Zotero translation-server, built for amd64 and arm64
+            org.opencontainers.image.revision=${{ steps.rev.outputs.sha }}

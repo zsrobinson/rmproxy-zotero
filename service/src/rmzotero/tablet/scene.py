@@ -38,7 +38,7 @@ from rmscene.tagged_block_common import CrdtId, LwwValue
 ZOTERO_LAYER = "Zotero"
 ROOT = CrdtId(0, 1)
 END = CrdtId(0, 0)
-SERVICE_AUTHOR = uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/zsrobinson/rmproxy-zotero")
+SERVICE_AUTHOR = uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/zsrobinson/rmzotero")
 
 
 def id_str(c: CrdtId) -> str:

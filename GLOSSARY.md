@@ -1,4 +1,4 @@
-# rmproxy-zotero
+# rmzotero
 
 Keeps a Zotero library and a reMarkable tablet in step: Zotero's items travel to the tablet, and annotations made on either side appear on the other.
 

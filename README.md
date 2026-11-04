@@ -1,4 +1,4 @@
-# rmproxy-zotero
+# rmzotero
 
 Keep a Zotero library and a reMarkable 2 in step, through your self-hosted rmfakecloud:
 
@@ -39,11 +39,11 @@ You need rmfakecloud already working with your tablet (yours is), Zotero syncing
 
 ### 1. Deploy the service next to rmfakecloud
 
-The image is built by GitHub Actions and published as `ghcr.io/zsrobinson/rmproxy-zotero` (amd64 and arm64). On the NAS, in the folder with your rmfakecloud `docker-compose.yml`:
+The image is built by GitHub Actions and published as `ghcr.io/zsrobinson/rmzotero` (amd64 and arm64). On the NAS, in the folder with your rmfakecloud `docker-compose.yml`:
 
 ```sh
 mkdir -p rmzotero/config rmzotero/data
-curl -L -o rmzotero/config/rmzotero.toml https://raw.githubusercontent.com/zsrobinson/rmproxy-zotero/main/deploy/rmzotero.example.toml
+curl -L -o rmzotero/config/rmzotero.toml https://raw.githubusercontent.com/zsrobinson/rmzotero/main/deploy/rmzotero.example.toml
 # edit rmzotero/config/rmzotero.toml: Zotero user id + key, WebDAV URL/login, a long random api.token
 ```
 
@@ -92,7 +92,7 @@ Expose port 8787 through your existing tunnel or reverse proxy **with HTTPS**, t
 
 ### 5. Install the plugin
 
-Download `rmzotero.xpi` from the [latest release](https://github.com/zsrobinson/rmproxy-zotero/releases/latest). In Zotero: Tools → Plugins → ⚙ → Install Plugin From File… → `rmzotero.xpi`. Zotero updates it automatically after that. Then Settings → reMarkable: enter the service address and token, press **Connect**, choose collections, **Save**.
+Download `rmzotero.xpi` from the [latest release](https://github.com/zsrobinson/rmzotero/releases/latest). In Zotero: Tools → Plugins → ⚙ → Install Plugin From File… → `rmzotero.xpi`. Zotero updates it automatically after that. Then Settings → reMarkable: enter the service address and token, press **Connect**, choose collections, **Save**.
 
 ### If the container keeps restarting
 
@@ -106,7 +106,7 @@ With `pull_policy: always` (in the snippet), restarting or rebuilding the projec
 docker compose pull rmzotero && docker compose up -d rmzotero
 ```
 
-To see which commit you're running: `docker image inspect ghcr.io/zsrobinson/rmproxy-zotero:latest --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'`
+To see which commit you're running: `docker image inspect ghcr.io/zsrobinson/rmzotero:latest --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'`
 
 ## Using it
 
@@ -150,7 +150,7 @@ or retry immediately when the file or settings change). Three ways to see it:
 
 ## Development
 
-GitHub Actions run the tests on every push (`ci.yml`), publish the Docker image whenever `service/` changes on `main` (`docker.yml`), and publish a plugin release whenever `plugin/package.json`'s version changes on `main` (`release.yml`). To ship a plugin update, bump that version and merge.
+GitHub Actions run the tests on every push (`ci.yml`), publish the Docker image whenever `service/` changes on `main` (`docker.yml`), and publish a plugin release whenever `plugin/package.json`'s version changes on `main` (`release.yml`). `translation-server.yml` builds Zotero's translation server for amd64 and arm64 every week (Zotero's own image is arm64-only) and publishes `ghcr.io/zsrobinson/translation-server`. To ship a plugin update, bump that version and merge.
 
 Locally:
 

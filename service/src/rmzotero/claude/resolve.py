@@ -66,7 +66,7 @@ class Resolver:
     def __init__(self, translation_url: str, contact_email: str = "", *, client: httpx.Client | None = None):
         self.base = translation_url.rstrip("/")
         self.email = contact_email
-        self.http = client or httpx.Client(timeout=60.0, follow_redirects=True, headers={"User-Agent": "rmzotero (+https://github.com/zsrobinson/rmproxy-zotero)"})
+        self.http = client or httpx.Client(timeout=60.0, follow_redirects=True, headers={"User-Agent": "rmzotero (+https://github.com/zsrobinson/rmzotero)"})
 
     # -- metadata ------------------------------------------------------------------
     def resolve(self, query: str) -> Resolution:

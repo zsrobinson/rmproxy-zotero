@@ -3,7 +3,7 @@
 # Update later with: docker compose pull rmzotero && docker compose up -d rmzotero
 services:
   rmzotero:
-    image: ghcr.io/zsrobinson/rmproxy-zotero:latest
+    image: ghcr.io/zsrobinson/rmzotero:latest
     pull_policy: always                  # check for a newer image every time the project starts or builds
     restart: unless-stopped
     depends_on:
@@ -20,7 +20,8 @@ services:
     #   RMZOTERO_OCR_LANGUAGE: "eng+deu"  # tesseract languages (only English is in the image)
 
   # Zotero's own metadata engine, used by the Claude connector to add items from DOIs, ISBNs and URLs.
+  # Built for amd64 and arm64 by this repo's translation-server workflow (Zotero's own image is arm64-only).
   translation-server:
-    image: zotero/translation-server:latest
+    image: ghcr.io/zsrobinson/translation-server:latest
     pull_policy: always
     restart: unless-stopped

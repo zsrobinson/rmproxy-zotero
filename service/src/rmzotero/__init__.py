@@ -2,6 +2,6 @@
 
 import os
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 # the commit the Docker image was built from (set by the image build), to tell builds apart
 REVISION = os.environ.get("RMZOTERO_REVISION", "")[:12] or None

@@ -58,6 +58,29 @@ def test_needs_ocr_detection():
     assert needs_ocr(scanned(text))
 
 
+def _join(*pdfs: bytes) -> bytes:
+    import pikepdf
+
+    out = pikepdf.new()
+    for p in pdfs:
+        out.pages.extend(pikepdf.open(io.BytesIO(p)).pages)
+    buf = io.BytesIO()
+    out.save(buf)
+    return buf.getvalue()
+
+
+def test_a_typeset_book_with_a_cover_and_blank_pages_is_not_a_scan():
+    # what a publisher's PDF looks like: a picture cover, a blank page, then text
+    cover = scanned(text_pdf([[("COVER ART", 40)]], size=(300, 400)))
+    blank = text_pdf([[]], size=(300, 400))
+    body = text_pdf([[(f"Chapter text on page {i}", 12)] for i in range(10)], size=(300, 400))
+    assert not needs_ocr(_join(cover, blank, body))
+    # a class reading that's half photocopied still counts
+    copied = scanned(text_pdf([[(f"Photocopied page {i}", 14)] for i in range(4)], size=(300, 400)))
+    typed = text_pdf([[("Typed intro", 12)]] * 4, size=(300, 400))
+    assert needs_ocr(_join(typed, copied))
+
+
 @pytest.mark.skipif(not (shutil.which("tesseract") and Path(OCRMYPDF).exists()), reason="ocrmypdf/tesseract not installed")
 def test_ocr_adds_text_only_where_missing():
     a = text_pdf([[("Original born-digital text stays exactly as it was", 14)]], size=(400, 300))

@@ -44,6 +44,7 @@ class Api:
         r("GET", r"/api/editions", self.list_editions)
         r("POST", r"/api/sync", self.sync_now)
         r("POST", r"/api/restore-removed", self.restore_removed)
+        r("POST", r"/api/cleanup-copies", self.cleanup_copies)
 
     def _route(self, method: str, pattern: str, fn: Callable, auth: bool = True) -> None:
         self.routes.append((method, re.compile(pattern + "$"), fn, auth))
@@ -277,6 +278,9 @@ class Api:
 
     def list_editions(self, _):
         return {"editions": self.engine.editions()}
+
+    def cleanup_copies(self, payload):
+        return {"applied": bool(payload.get("apply")), "copies": self.engine.cleanup_copies(apply=bool(payload.get("apply")))}
 
     def restore_removed(self, _):
         return {"restored": self.engine.restore_all_removed()}

@@ -140,6 +140,8 @@ or retry immediately when the file or settings change). Three ways to see it:
 - **Claude:** ask Claude (with the connector) to look; it has a `service_diagnostics` tool.
 - **SSH:** `sudo docker compose exec rmzotero rmzotero diagnostics` (add `--json` for the full report).
 
+`rmzotero cleanup` lists tablet editions and searchable copies you didn't ask for: editions made automatically by versions before 0.3.0, and searchable copies of PDFs that already had text. `rmzotero cleanup --apply` moves them to Zotero's trash; the original PDFs go back to the tablet.
+
 ## What isn't synced (by design, for now)
 
 - **Comments** on highlights and Zotero **notes** stay in Zotero (ADR 0008).

@@ -51,6 +51,16 @@ EDITION_FRESH_SECONDS = 600  # finished edition jobs are reported to the plugin 
 EDITION_STAGES = {"waiting": 0, "reading the EPUB": 10, "typesetting": 30, "adding to Zotero": 85, "done": 100}
 
 
+def _related_key(item: dict) -> str | None:
+    """The attachment a derived attachment was made from, via its dc:relation link."""
+    rel = (item.get("relations") or {}).get("dc:relation") or []
+    for url in [rel] if isinstance(rel, str) else rel:
+        key = url.rstrip("/").rsplit("/", 1)[-1]
+        if len(key) == 8:
+            return key
+    return None
+
+
 def _item_title(lib: Library, key: str) -> str:
     it = lib.items.get(key) or {}
     parent = lib.items.get(it.get("parentItem") or "") or {}
@@ -910,6 +920,59 @@ class Engine:
             self.state.event("warning", f"Synced documents use {total / 1024**3:.1f} GB of {settings.tablet_capacity_gb} GB. Exclude collections or enable archiving.")
 
     # -- actions from the plugin ---------------------------------------------------------------------
+    def cleanup_copies(self, apply: bool = False) -> list[dict]:
+        """Attachments the service made that you didn't ask for (ADR 0016, and the old scan detector):
+
+        - every tablet edition of an EPUB (they were made automatically before 0.3.0; make one from
+          the plugin when you want it), and
+        - every searchable copy whose original isn't actually a scan.
+
+        Lists them; with ``apply`` moves them to Zotero's trash (recoverable there), so the original
+        PDFs go back to the tablet and the EPUBs leave it. Returns what was (or would be) removed.
+        """
+        with self.lock:
+            sources = {r["derived_key"]: r["source_key"] for r in self.state.all("SELECT * FROM derived WHERE derived_key IS NOT NULL")}
+            found = []
+            for key, it in list(self.lib.items.items()):
+                if it.get("itemType") != "attachment" or it.get("deleted") or self.lib.is_trashed(key):
+                    continue
+                tags = {t.get("tag") for t in it.get("tags") or []}
+                kind = "edition" if "rmzotero:rendition" in tags else "searchable" if "rmzotero:searchable" in tags else None
+                if kind is None:
+                    continue
+                source = sources.get(key) or _related_key(it)
+                if kind == "searchable":
+                    if not source or source not in self.lib.items or self.lib.items[source].get("deleted"):
+                        continue  # the copy may be all that's left of the scan: keep it
+                    try:
+                        _fn, data = self.files.get(source)
+                    except Exception as e:
+                        log.warning("couldn't check %s: %s", source, e)
+                        continue
+                    if ocr_mod.needs_ocr(data):
+                        continue  # a real scan: keep its searchable copy
+                    reason = "the original already has text"
+                else:
+                    reason = "made automatically; make one from the plugin when you want it"
+                found.append({"key": key, "kind": kind, "source": source, "item": _item_title(self.lib, key),
+                              "title": it.get("title"), "annotations": len(self.lib.annotations(key)), "reason": reason})
+            if apply:
+                for f in found:
+                    it = self.lib.items[f["key"]]
+                    res = self.zotero.write_items([{"key": f["key"], "version": it["version"], "deleted": 1}])
+                    if f["key"] not in res.versions:
+                        f["error"] = str(res.failed.get(f["key"]) or "conflict")
+                        continue
+                    self.lib.apply_local_write([{**it, "deleted": 1, "version": res.versions[f["key"]]}])
+                    if f["kind"] == "edition":
+                        self.state.exec("DELETE FROM derived WHERE kind='rendition' AND derived_key=?", (f["key"],))
+                        self.state.exec("DELETE FROM editions WHERE result_key=?", (f["key"],))
+                    elif f["source"]:
+                        self._set_derived(f["source"], "searchable", None, {"reason": "not a scan"})
+                    self.state.event("info", f"Removed an unneeded {'tablet edition' if f['kind'] == 'edition' else 'searchable copy'} ({f['reason']}).", f["source"] or f["key"])
+                self.wakeup.set()
+            return found
+
     def request_restore(self, att_key: str) -> bool:
         row = self.state.doc(att_key)
         if not row:

@@ -421,3 +421,48 @@ def test_restore_all_removed(world):
     eng.sync()
     assert [r["state"] for r in eng.state.docs()] == ["active"]
     assert not tablet.tree.is_trashed(tablet.doc_named("Vaswani - 2017 - Attention").id)
+
+
+def test_cleanup_removes_unrequested_editions_and_unneeded_searchable_copies(world):
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from test_derive import scanned
+
+    z, files, cloud, clock, eng, tablet = world
+    from rmzotero.config import Settings, save_settings
+
+    save_settings(eng.state, Settings.from_dict({"ocr": True}, eng.settings), eng.cfg.defaults)
+    ml = z.add_collection("ML")
+    item, att = add_paper(z, files, [ml])  # already has text
+    _, scan = add_paper(z, files, [ml], title="Photocopy", pdf=scanned(PAPER))  # a real scan
+    book = z.add_item({"itemType": "book", "title": "A Novel", "collections": [ml]})
+    epub = z.add_item({"itemType": "attachment", "parentItem": book, "linkMode": "imported_file",
+                       "contentType": "application/epub+zip", "title": "EPUB", "filename": "n.epub"})
+    eng.lib.refresh(z)
+    # what older versions made without being asked: a needless searchable copy, a real one, and an edition
+    copy = eng._create_attachment(eng.lib.items[att], "Attention (searchable)", "a.pdf", PAPER, "rmzotero:searchable")
+    eng._set_derived(att, "searchable", copy, {})
+    real = eng._create_attachment(eng.lib.items[scan], "Photocopy (searchable)", "p.pdf", PAPER, "rmzotero:searchable")
+    eng._set_derived(scan, "searchable", real, {})
+    edition = eng._create_attachment(eng.lib.items[epub], "A Novel (tablet edition)", "n.pdf", PAPER, "rmzotero:rendition")
+    eng._set_derived(epub, "rendition", edition, {})
+    eng.sync()
+    tablet.sync()
+    names = lambda: sorted(d.name for d in tablet.tree.docs.values() if not d.is_folder and not tablet.tree.is_trashed(d.id))
+    assert len(names()) == 3  # the needless copy, the real scan's copy, the edition
+
+    found = eng.cleanup_copies()
+    assert {(f["key"], f["kind"]) for f in found} == {(copy, "searchable"), (edition, "edition")}  # the real scan's copy stays
+    assert not any(o.get("deleted") for o in z.items() if o["key"] in (copy, edition))  # a dry run changes nothing
+
+    eng.cleanup_copies(apply=True)
+    assert all(o.get("deleted") for o in z.items() if o["key"] in (copy, edition))
+    clock.advance()
+    eng.sync()
+    tablet.sync()
+    # the original PDF replaces its needless copy; the EPUB leaves the tablet until an edition is asked for
+    assert eng.state.doc(att)["state"] == "active" and eng.state.doc(copy)["state"] == "trashed"
+    assert eng.state.doc(edition)["state"] == "trashed" and eng.state.doc(real)["state"] == "active"
+    assert len(names()) == 2
+    assert eng.cleanup_copies() == []

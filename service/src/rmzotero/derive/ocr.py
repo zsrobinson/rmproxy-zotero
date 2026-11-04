@@ -18,14 +18,38 @@ class OcrError(Exception):
     pass
 
 
-def needs_ocr(pdf: bytes, min_fraction: float = 0.0) -> bool:
-    """True if some page has no text (a scan). ``min_fraction`` ignores documents with only a few such pages."""
+SCANNED_SHARE = 0.25  # at least this share of pages must look scanned
+IMAGE_COVERAGE = 0.5  # a "scanned" page is mostly one picture
+
+
+def scanned_pages(pdf: bytes) -> tuple[int, list[int]]:
+    """(page count, pages that look scanned): no text at all, and mostly covered by a picture.
+
+    Blank pages and pages with text don't count, so a typeset book with a cover, blank versos
+    or a few photo pages isn't mistaken for a scan.
+    """
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as pdfium_c
+
     tl = TextLayer(pdf)
-    n = len(tl)
-    if n == 0:
-        return False
-    missing = len(tl.pages_without_text())
-    return missing > 0 and missing / n > min_fraction
+    doc = pdfium.PdfDocument(pdf)
+    out = []
+    for i in tl.pages_without_text():
+        page = doc[i]
+        w, h = page.get_size()
+        covered = 0.0
+        for obj in page.get_objects(filter=(pdfium_c.FPDF_PAGEOBJ_IMAGE,), max_depth=3):
+            left, bottom, right, top = (obj.get_bounds if hasattr(obj, "get_bounds") else obj.get_pos)()
+            covered = max(covered, max(0.0, min(right, w) - max(left, 0.0)) * max(0.0, min(top, h) - max(bottom, 0.0)))
+        if w * h and covered / (w * h) >= IMAGE_COVERAGE:
+            out.append(i)
+    return len(tl), out
+
+
+def needs_ocr(pdf: bytes, min_share: float = SCANNED_SHARE) -> bool:
+    """True if the PDF is (largely) a scan: enough of its pages are pictures of text with no text layer."""
+    n, scanned = scanned_pages(pdf)
+    return n > 0 and len(scanned) / n >= min_share
 
 
 def ocr_available(binary: str = "ocrmypdf") -> bool:

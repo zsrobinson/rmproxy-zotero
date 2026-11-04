@@ -318,6 +318,30 @@ def cmd_restore_removed(cfg: Config, args) -> int:
     return 0
 
 
+def cmd_cleanup(cfg: Config, args) -> int:
+    """List (or, with --apply, trash) tablet editions and searchable copies you didn't ask for."""
+    import httpx
+
+    _host, _, port = cfg.api_listen.rpartition(":")
+    r = httpx.post(f"http://127.0.0.1:{port}/api/cleanup-copies", json={"apply": args.apply},
+                   headers={"Authorization": f"Bearer {cfg.api_token}"}, timeout=1800)
+    r.raise_for_status()
+    copies = r.json()["copies"]
+    if not copies:
+        print("Nothing to clean up.")
+        return 0
+    for c in copies:
+        what = "tablet edition" if c["kind"] == "edition" else "searchable copy"
+        note = f", {c['annotations']} annotation(s) go to the trash with it" if c["annotations"] else ""
+        err = f"  FAILED: {c['error']}" if c.get("error") else ""
+        print(f"- {c['item']}: {what} \"{c['title']}\" ({c['reason']}{note}){err}")
+    if args.apply:
+        print(f"\nMoved {sum(1 for c in copies if not c.get('error'))} to Zotero's trash. The tablet catches up at the next sync.")
+    else:
+        print(f"\n{len(copies)} attachment(s) would go to Zotero's trash (recoverable there). Run again with --apply to do it.")
+    return 0
+
+
 def cmd_diagnostics(cfg: Config, args) -> int:
     """Ask the running service for its diagnostics; fall back to what's stored if it isn't running."""
     import httpx
@@ -359,6 +383,8 @@ def main(argv: list[str] | None = None) -> int:
     ct.add_argument("--annotate", action="store_true", help="step 2: add a Zotero layer to the page you drew on")
     ct.add_argument("--verify", action="store_true", help="step 3: confirm the Zotero layer and your writing survived")
     sub.add_parser("restore-removed", help="send back every document marked 'removed on tablet'")
+    cl = sub.add_parser("cleanup", help="list tablet editions and searchable copies you didn't ask for")
+    cl.add_argument("--apply", action="store_true", help="move them to Zotero's trash")
     dg = sub.add_parser("diagnostics", help="what the running service is doing, timings and failures")
     dg.add_argument("--json", action="store_true", help="the full report as JSON")
     dp = sub.add_parser("debug-page", help="print the structure of a tablet page (for troubleshooting)")
@@ -390,7 +416,8 @@ def main(argv: list[str] | None = None) -> int:
               "in the container's environment to the owner of those files.", file=sys.stderr)
         return 2
     return {"run": cmd_run, "sync-once": cmd_sync_once, "register": cmd_register,
-            "check-zotero": cmd_check_zotero, "check-tablet": cmd_check_tablet, "debug-page": cmd_debug_page, "diagnostics": cmd_diagnostics, "restore-removed": cmd_restore_removed}[args.cmd](cfg, args)
+            "check-zotero": cmd_check_zotero, "check-tablet": cmd_check_tablet, "debug-page": cmd_debug_page, "diagnostics": cmd_diagnostics, "restore-removed": cmd_restore_removed,
+            "cleanup": cmd_cleanup}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":

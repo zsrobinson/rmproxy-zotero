@@ -26,8 +26,39 @@ TRANSLATED = {
 }
 
 
+REPO_PDF = text_pdf([[("A repository copy", 14)]], size=(400, 500))
+ARTICLE_TEXT = " ".join(["Scooters were not the first vehicles to fight for the street; bicycles did it a century earlier."] * 12)
+ARTICLE_PAGE = f"""<html><head><title>The fight over bicycles | Example Magazine</title></head><body>
+<nav>Home | Sections | Subscribe</nav><article><h2>A century-old battle</h2><p>{ARTICLE_TEXT}</p><p>{ARTICLE_TEXT}</p>
+<p>See https://example.org//odd/path and the street / sidewalk divide.</p><img src="lazy.jpg"/></article><footer>About us</footer></body></html>"""
+
+
 def resolver(email="me@example.org"):
     def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.host == "translation-server" and req.url.path == "/web":
+            u = req.content.decode()
+            if "news.example.org" in u:
+                return httpx.Response(500, text="An error occurred retrieving the document")
+            raise AssertionError(u)
+        if req.url.host == "api.openalex.org":
+            if req.url.path.endswith("10.5555/repo"):
+                return httpx.Response(200, json={"best_oa_location": {"is_oa": True, "pdf_url": None, "landing_page_url": "https://repo.example.org/item/7"},
+                                                 "locations": [{"is_oa": False, "pdf_url": "https://publisher.example.org/paywalled.pdf"}]})
+            if req.url.path.endswith("10.5555/closed"):
+                return httpx.Response(200, json={"best_oa_location": None, "locations": [{"is_oa": False}]})
+            return httpx.Response(404)
+        if req.url.host == "repo.example.org":
+            if req.url.path == "/item/7":
+                return httpx.Response(200, text='<html><head><meta name="citation_pdf_url" content="/bitstreams/7/download"></head><body>Item</body></html>',
+                                      headers={"content-type": "text/html; charset=utf-8"})
+            if req.url.path == "/bitstreams/7/download":
+                return httpx.Response(200, content=REPO_PDF, headers={"content-type": "application/octet-stream"})
+        if req.url.host == "blocked.example.org":
+            return httpx.Response(403, text="Forbidden")
+        if req.url.host == "news.example.org":
+            if req.url.path == "/paywalled":
+                return httpx.Response(403)
+            return httpx.Response(200, text=ARTICLE_PAGE, headers={"content-type": "text/html; charset=utf-8"})
         if req.url.path == "/search":
             q = req.content.decode()
             if "10.1109" in q:
@@ -39,6 +70,8 @@ def resolver(email="me@example.org"):
             return httpx.Response(501)
         if req.url.host == "api.unpaywall.org":
             assert req.url.params["email"] == email
+            if "10.1109" not in req.url.path:
+                return httpx.Response(404)
             return httpx.Response(200, json={"best_oa_location": {"url_for_pdf": "https://oa.example.org/paper.pdf"}})
         if req.url.host == "oa.example.org":
             return httpx.Response(200, content=OA_PDF, headers={"content-type": "application/pdf"})
@@ -142,6 +175,121 @@ def test_add_items(lib_world):
     assert not rep.errors and rep.uploaded == 1
 
 
+def test_listing_a_collection_and_which_items_have_pdfs(lib_world):
+    z, files, eng, tablet, clock, ops, ml, item, att = lib_world
+    book = ops.create_item("book", {"title": "Redefining Geek", "creators": ["Cassidy Puckett"]}, collections=[ml])["key"]
+    listed = ops.search_library("", collection=ml)
+    assert listed["count"] == 2 and {i["key"]: i["has_pdf"] for i in listed["items"]} == {item: True, book: False}
+    assert "next_offset" not in listed
+    page = ops.search_library("", collection=ml, limit=1)
+    assert len(page["items"]) == 1 and page["next_offset"] == 1
+    assert len(ops.search_library("", collection=ml, limit=1, offset=1)["items"]) == 1
+
+
+def test_create_item_for_sources_no_translator_reads(lib_world):
+    z, files, eng, tablet, clock, ops, ml, item, att = lib_world
+    res = ops.create_item("newspaperArticle", {
+        "title": "Amazon and Baltimore", "publicationTitle": "The New York Times", "date": "2019-11-30",
+        "url": "https://news.example.org/amazon", "creators": ["Smith, Jane", "John Q. Public", {"name": "Staff"}],
+    }, collections=[ml])
+    assert res["status"] == "added" and "typeset_webpage" in res["next"]
+    new = z.objects[res["key"]]
+    assert new["creators"] == [
+        {"creatorType": "author", "firstName": "Jane", "lastName": "Smith"},
+        {"creatorType": "author", "firstName": "John Q.", "lastName": "Public"},
+        {"creatorType": "author", "name": "Staff"}] and new["collections"] == [ml]
+    # the same citation again is reused
+    assert ops.create_item("newspaperArticle", {"title": "Amazon and Baltimore"})["key"] == res["key"]
+    with pytest.raises(ValueError, match="blogTitle isn't a field of newspaperArticle"):
+        ops.create_item("newspaperArticle", {"title": "x", "blogTitle": "y"})
+    with pytest.raises(ValueError, match="no item type"):
+        ops.create_item("newsArticle", {"title": "x"})
+    with pytest.raises(ValueError, match="no creator type"):
+        ops.create_item("book", {"title": "A whole book", "creators": [{"lastName": "X", "creatorType": "bookAuthor"}]})
+
+
+def test_edit_item_changes_the_item_type(lib_world):
+    z, files, eng, tablet, clock, ops, ml, item, att = lib_world
+    key = z.add_item({"itemType": "blogPost", "title": "Bystander intervention on social media", "blogTitle": "Brookings",
+                      "websiteType": "Research", "url": "https://www.brookings.edu/articles/x/", "creators": [{"creatorType": "commenter", "name": "Reader"}]})
+    eng.lib.refresh(z)
+    res = ops.edit_item(key, {"itemType": "report", "institution": "Brookings Institution", "creators": ["Hanna, Alex"]})
+    assert res["itemType"] == "blogPost -> report" and res["moved"] == {"reportType": "Research"} and res["dropped"] == {"blogTitle": "Brookings"}
+    stored = z.objects[key]
+    assert stored["itemType"] == "report" and stored["reportType"] == "Research" and stored["institution"] == "Brookings Institution"
+    assert "blogTitle" not in stored and "websiteType" not in stored
+    assert stored["creators"] == [{"creatorType": "author", "firstName": "Alex", "lastName": "Hanna"}]
+    assert eng.lib.items[key]["itemType"] == "report" and "blogTitle" not in eng.lib.items[key]  # the mirror follows
+    # a creator role the new type doesn't have becomes its primary role
+    key2 = z.add_item({"itemType": "blogPost", "title": "Another post", "creators": [{"creatorType": "commenter", "name": "Reader"}]})
+    eng.lib.refresh(z)
+    ops.edit_item(key2, {"itemType": "webpage"})
+    assert z.objects[key2]["creators"] == [{"creatorType": "author", "name": "Reader"}]
+    with pytest.raises(ValueError, match="isn't a field of report"):
+        ops.edit_item(key, {"blogTitle": "Brookings"})
+
+
+def test_attach_pdf_from_links_and_pages(lib_world):
+    z, files, eng, tablet, clock, ops, ml, item, att = lib_world
+    def pdfs(key):
+        return [o for o in z.items() if o.get("parentItem") == key and o.get("contentType") == "application/pdf"]
+
+    # a repository landing page that declares its PDF (DSpace, EPrints, publishers...)
+    k = ops.create_item("journalArticle", {"title": "Connecting spaces", "DOI": "10.5555/repo"})["key"]
+    res = ops.attach_pdf(k)
+    assert res["pdf"] == "PDF attached from https://repo.example.org/bitstreams/7/download"
+    assert files.get(pdfs(k)[0]["key"])[1] == REPO_PDF
+    assert [a["from"] for a in res["pdf_attempts"]] == ["OpenAlex (landing page)", "linked from https://repo.example.org/item/7"]
+    assert ops.attach_pdf(k)["pdf"].startswith("already has a PDF")
+    assert ops.attach_pdf(k, "https://repo.example.org/item/7")["pdf"].startswith("that PDF is already attached")
+
+    # nothing free: every reason is given
+    k2 = ops.create_item("journalArticle", {"title": "A closed paper", "DOI": "10.5555/closed", "url": "https://blocked.example.org/a"})["key"]
+    res = ops.attach_pdf(k2)
+    assert res["pdf"] == "no free PDF found" and not pdfs(k2)
+    assert res["pdf_attempts"] == [{"url": "https://blocked.example.org/a", "from": "the item's URL",
+                                    "result": "HTTP 403: the site refused (it needs a login, or blocks automated downloads)"}]
+    assert "OpenAlex: not open access" in res["pdf_notes"]
+    res = ops.attach_pdf(k2, "https://news.example.org/fight")
+    assert res["pdf"] == "no PDF at that link" and "a web page, not a PDF" in res["pdf_attempts"][0]["result"]
+
+
+def test_web_articles_typeset_into_a_tablet_pdf(lib_world):
+    z, files, eng, tablet, clock, ops, ml, item, att = lib_world
+    import shutil
+
+    if not shutil.which("pandoc"):
+        pytest.skip("pandoc not installed")
+    k = ops.create_item("magazineArticle", {"title": "The fight over bicycles", "publicationTitle": "Example Magazine",
+                                            "url": "https://news.example.org/fight", "creators": ["Ann Thompson"]}, collections=[ml])["key"]
+    res = ops.attach_pdf(k)  # no DOI and no PDF anywhere
+    assert res["pdf"] == "no free PDF found" and "typeset_webpage" in res["hint"]
+    res = ops.attach_pdf(k, typeset_webpage=True)
+    assert res["webpage_pdf"].startswith("typeset the page's text")
+    [pdf] = [o for o in z.items() if o.get("parentItem") == k and o.get("contentType") == "application/pdf"]
+    assert pdf["title"] == "Web page (tablet PDF)" and pdf["tags"] == [{"tag": "rmzotero:webpage"}]
+    from rmzotero.pdf.text import TextLayer
+
+    tl = TextLayer(files.get(pdf["key"])[1])
+    text = "".join(c.text for i in range(len(tl)) for c in tl.chars(i))
+    assert text.startswith("The fight over bicycles") and "Ann Thompson · Example Magazine" in text
+    assert "bicycles did it a century earlier" in text and "example.org//odd/path" in text and "Subscribe" not in text
+    assert ops.attach_pdf(k, "https://news.example.org/paywalled", typeset_webpage=True)["webpage_pdf"].startswith("couldn't get the page: HTTP 403")
+    # the tablet gets it like any PDF
+    clock.advance(500)
+    assert not eng.sync().errors
+
+
+def test_blocked_sites_and_bare_pdfs_explain_themselves(lib_world):
+    z, files, eng, tablet, clock, ops, ml, item, att = lib_world
+    [blocked] = ops.add_items(["https://news.example.org/paywalled"])["results"]
+    assert "refused" in blocked["error"] and "create_item" in blocked["error"]
+    ops.resolver.email = ""
+    [closed] = ops.add_items(["doi:10.1109/CVPR.2016.90"])["results"]  # only Unpaywall knows a free copy of this one
+    assert closed["status"] == "added" and closed["pdf"] == "no free PDF found"
+    assert "Unpaywall not asked: [claude] contact_email isn't set in rmzotero.toml" in closed["pdf_notes"]
+
+
 def test_mcp_protocol_end_to_end(lib_world):
     from mcp import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
@@ -161,7 +309,8 @@ def test_mcp_protocol_end_to_end(lib_world):
                     assert "reMarkable" in (init.instructions or "")
                     tools = {t.name: t for t in (await s.list_tools()).tools}
                     assert set(tools) == {"search_library", "get_item", "list_collections", "get_annotations", "read_pages", "view_pages",
-                                          "add_items", "create_collection", "file_items", "add_note", "edit_item", "service_diagnostics"}
+                                          "add_items", "attach_pdf", "create_item", "create_collection", "file_items", "add_note",
+                                          "edit_item", "service_diagnostics"}
                     assert tools["search_library"].annotations.readOnlyHint is True
                     assert tools["add_items"].annotations.readOnlyHint is False
                     assert tools["file_items"].annotations.destructiveHint is True

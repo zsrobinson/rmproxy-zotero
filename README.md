@@ -121,12 +121,14 @@ To see which commit you're running: `docker image inspect ghcr.io/zsrobinson/rmz
 
 Claude can search and organise the library, read your highlights and see your handwriting (ADR 0015). It works from claude.ai on any device.
 
-1. In `rmzotero.toml`, set `[claude] secret` to a long random string (`openssl rand -hex 32`) and `contact_email` (used to find free PDFs via Unpaywall).
+1. In `rmzotero.toml`, set `[claude] secret` to a long random string (`openssl rand -hex 32`) and, optionally, `contact_email` (Unpaywall needs one; without it free PDFs are still looked up through OpenAlex).
 2. Add the `translation-server` service and the `8788` port from the compose snippet, and restart the project.
 3. Expose port 8788 through your reverse proxy with HTTPS, like the plugin API.
 4. In claude.ai: **Settings → Connectors → Add custom connector**, with the URL `https://<that address>/mcp/<secret>`.
 
-Tools: `search_library`, `get_item`, `list_collections`, `get_annotations`, `read_pages`, `view_pages` (page images with your tablet writing), and, after you confirm each one in Claude, `add_items` (from DOIs, ISBNs, arXiv IDs or article URLs, with free PDFs attached), `create_collection`, `file_items`, `add_note`, `edit_item`. Nothing deletes items. Claude never puts things on the tablet directly: filing an item into a synced collection does that.
+Tools: `search_library` (an empty query lists a collection), `get_item`, `list_collections`, `get_annotations`, `read_pages`, `view_pages` (page images with your tablet writing), and, after you confirm each one in Claude, `add_items` (from DOIs, ISBNs, arXiv IDs or article URLs, with free PDFs attached), `create_item` (from a citation, for sources no translator can read), `attach_pdf` (from a link, a free copy, or by typesetting a web article's text), `create_collection`, `file_items`, `add_note`, `edit_item` (including the item type). Nothing deletes items. Claude never puts things on the tablet directly: filing an item into a synced collection does that.
+
+When no PDF is found, the result lists each link tried and why it failed. Sites that refuse automated access (most news sites) are reported as such: Claude enters those readings with `create_item`, and you add the PDF. ADR 0017 has the details.
 
 The URL is the password: keep it private, and change the secret to revoke access.
 

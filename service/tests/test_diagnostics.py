@@ -77,3 +77,16 @@ def test_nested_steps_in_a_phase_are_not_counted_twice():
                 _t.sleep(0.05)
     assert act.what == "idle"
     assert 0.1 <= act.phases["conversions"] < 0.15
+
+
+def test_idle_cycles_are_collapsed():
+    from rmzotero.diagnostics import summarise_cycles
+
+    def cycle(t, uploaded=0, errors=()):
+        return {"started": t, "seconds": 0.2, "uploaded": uploaded, "synced_docs": 0, "derived": 0, "to_zotero": 0, "to_tablet": 0,
+                "pending": 0, "backed_off": 0, "paused": False, "errors": list(errors), "slowest_documents": []}
+
+    newest_first = [cycle(100), cycle(99), cycle(98), cycle(97, uploaded=2), cycle(96), cycle(95, errors=["boom"]), cycle(94)]
+    out = summarise_cycles(newest_first)
+    assert [c.get("idle_cycles") or c["started"] for c in out] == [3, 97, 1, 95, 1]
+    assert out[0]["newest"] == 100 and out[0]["oldest"] == 98 and out[0]["average_seconds"] == 0.2

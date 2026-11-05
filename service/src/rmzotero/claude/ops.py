@@ -20,15 +20,17 @@ from ..pdf import edit
 from ..pdf.text import TextLayer
 from ..tablet.scene import Page
 from ..zotero.client import new_key
+from ..zotero.schema import NOT_REGULAR, Schema, parse_creators
 from . import render
-from .resolve import Resolver, isbn_digits, normalise_doi, normalise_title
+from .resolve import PdfAttempt, Resolver, isbn_digits, normalise_doi, normalise_title
 
 COLOR_NAMES = {"#ffd400": "yellow", "#ff6666": "red", "#5fb236": "green", "#2ea8e5": "blue", "#a28ae5": "purple",
                "#e56eee": "magenta", "#f19837": "orange", "#aaaaaa": "gray"}
-NOT_EDITABLE = {"key", "version", "itemType", "parentItem", "collections", "deleted", "relations", "dateAdded", "dateModified",
+NOT_EDITABLE = {"key", "version", "parentItem", "collections", "deleted", "relations", "dateAdded", "dateModified",
                 "linkMode", "contentType", "filename", "md5", "mtime", "charset"}
 MAX_TEXT_PAGES = 20
 MAX_IMAGE_PAGES = 4
+WEB_TYPES = {"webpage", "blogPost", "newspaperArticle", "magazineArticle", "forumPost", "report"}
 
 
 class Busy(Exception):
@@ -93,6 +95,22 @@ class LibraryOps:
     def __init__(self, engine, resolver: Resolver | None = None):
         self.engine = engine
         self.resolver = resolver
+        self._schema: Schema | None = None
+
+    def schema(self) -> Schema | None:
+        """Zotero's item schema, fetched once; None if it can't be had (writes then go unchecked)."""
+        if self._schema is None:
+            fetch = getattr(self.engine.zotero, "schema", None)
+            if fetch is None:
+                return None
+            try:
+                self._schema = Schema(fetch())
+            except Exception as e:  # network or parse trouble: try again next time
+                import logging
+
+                logging.getLogger(__name__).warning("couldn't load Zotero's item schema: %s", e)
+                return None
+        return self._schema
 
     @property
     def lib(self):
@@ -162,7 +180,7 @@ class LibraryOps:
 
     # -- reading ----------------------------------------------------------------------
     @_retry_reads
-    def search_library(self, query: str, collection: str | None = None, limit: int = 20) -> dict:
+    def search_library(self, query: str, collection: str | None = None, limit: int = 20, offset: int = 0) -> dict:
         tokens = [t for t in re.findall(r"\w+", (query or "").lower()) if t]
         scope = None
         if collection:
@@ -193,12 +211,17 @@ class LibraryOps:
             results.append((score, it, hit))
         results.sort(key=lambda r: (-r[0], r[1].get("title", "")))
         out = []
-        for _s, it, hit in results[: max(1, min(limit, 100))]:
+        start = max(0, offset)
+        for _s, it, hit in results[start : start + max(1, min(limit, 100))]:
             d = self._summary(it)
+            d["has_pdf"] = any(a.get("contentType") == "application/pdf" and not a.get("deleted") for a in self.lib.attachments(it["key"]))
             if hit:
                 d["matching_annotation"] = hit[:300]
             out.append(d)
-        return {"count": len(results), "items": out}
+        res = {"count": len(results), "items": out}
+        if start + len(out) < len(results):
+            res["next_offset"] = start + len(out)
+        return res
 
     @_retry_reads
     def get_item(self, key: str) -> dict:
@@ -361,17 +384,95 @@ class LibraryOps:
         bad = sorted(set(fields) & NOT_EDITABLE)
         if bad:
             raise ValueError(f"these can't be edited here: {', '.join(bad)} (use file_items for collections)")
+        schema = self.schema()
+        new_type = fields.pop("itemType", None) or it.get("itemType")
+        changing = new_type != it.get("itemType")
+        moved, dropped = {}, {}
+        if changing:
+            if schema is None:
+                raise RuntimeError("couldn't load Zotero's item schema, which changing an item's type needs; try again shortly")
+            if not schema.has_type(new_type) or new_type in NOT_REGULAR:
+                raise ValueError(f"no item type {new_type!r}; types: {', '.join(schema.item_types())}")
+            moved, dropped, creators = schema.convert(it, new_type)
+            for f in fields:  # a field set explicitly isn't dropped or overwritten by the move
+                dropped.pop(f, None)
+                moved.pop(f, None)
+            if creators is not None and "creators" not in fields:
+                fields["creators"] = creators
+        if "creators" in fields:
+            fields["creators"] = parse_creators(fields["creators"], new_type, schema)
+        if schema is not None and schema.has_type(new_type):
+            unknown = [f for f in schema.unknown_fields(new_type, fields) if f not in ("creators", "tags")]
+            if unknown:
+                raise ValueError(f"{', '.join(unknown)} isn't a field of {new_type}. {schema.describe(new_type)}")
         tags = [t for t in it.get("tags") or [] if t.get("tag") not in set(remove_tags or [])]
         tags += [{"tag": t} for t in add_tags or [] if t not in {x.get("tag") for x in tags}]
-        obj = {"key": it["key"], "version": it["version"], **fields}
+        obj = {"key": it["key"], "version": it["version"], **moved, **fields}
+        if changing:
+            obj["itemType"] = new_type
         if add_tags or remove_tags:
             obj["tags"] = tags
         with self._writing():
             res = self.engine.zotero.write_items([obj])
             if it["key"] not in res.versions:
                 raise RuntimeError(f"Zotero refused the change: {res.failed.get(it['key']) or 'the item changed meanwhile; read it again'}")
-            self.lib.apply_local_write([{**it, **obj, "version": res.versions[it["key"]]}])
-        return {"key": it["key"], "updated": sorted(set(obj) - {"key", "version"})}
+            stored = res.data.get(it["key"])
+            if stored is None:
+                stored = {k: v for k, v in {**it, **obj}.items() if k not in dropped}
+                if changing and schema is not None:
+                    stored = schema.apply_type_change({**it, **obj, "itemType": it.get("itemType")}, new_type)
+            self.lib.apply_local_write([{**stored, "version": res.versions[it["key"]]}])
+        out = {"key": it["key"], "updated": sorted(set(obj) - {"key", "version"})}
+        if changing:
+            out["itemType"] = f"{it.get('itemType')} -> {new_type}"
+            if moved:
+                out["moved"] = moved
+            if dropped:
+                out["dropped"] = dropped
+                out["note"] = f"{new_type} has no place for the dropped fields; set them under its own fields if they matter."
+        return out
+
+    def create_item(self, item_type: str, fields: dict, collections: list[str] | None = None) -> dict:
+        """A new item from metadata given directly (when no translator can read the source)."""
+        schema = self.schema()
+        fields = dict(fields or {})
+        bad = sorted(set(fields) & (NOT_EDITABLE | {"itemType"}))
+        if bad:
+            raise ValueError(f"these can't be set here: {', '.join(bad)} (collections go in the collections argument)")
+        if schema is not None and (not schema.has_type(item_type) or item_type in NOT_REGULAR):
+            raise ValueError(f"no item type {item_type!r}; types: {', '.join(schema.item_types())}")
+        if not str(fields.get("title") or "").strip():
+            raise ValueError("an item needs a title")
+        fields["creators"] = parse_creators(fields.get("creators"), item_type, schema)
+        tags = fields.pop("tags", None) or []
+        if schema is not None:
+            unknown = [f for f in schema.unknown_fields(item_type, fields) if f != "creators"]
+            if unknown:
+                raise ValueError(f"{', '.join(unknown)} isn't a field of {item_type}. {schema.describe(item_type)}")
+        collections = list(collections or [])
+        for c in collections:
+            if c not in self.lib.collections:
+                raise NotFound(f"no collection {c}")
+        item = {"itemType": item_type, **fields, "tags": [t if isinstance(t, dict) else {"tag": str(t)} for t in tags]}
+        existing = self._find_existing(item)
+        with self._writing():
+            if existing is not None:
+                parent, status = self._file_existing(existing, collections), "already in library"
+            else:
+                key = new_key()
+                obj = {**item, "key": key, "version": 0, "collections": collections}
+                res = self.engine.zotero.write_items([obj])
+                if key not in res.versions:
+                    raise RuntimeError(f"Zotero refused it: {res.failed.get(key) or 'conflict'}")
+                parent = {**(res.data.get(key) or obj), "version": res.versions[key]}
+                self.lib.apply_local_write([parent])
+                status = "added"
+        out = {"key": parent["key"], "title": parent.get("title"), "status": status,
+               "collections": [self._collection_path(c) for c in parent.get("collections") or [] if c in self.lib.collections]}
+        if not self._pdf_attachments(parent["key"]):
+            out["next"] = "No PDF yet: attach_pdf can add one from a link" + (
+                ", or typeset the page itself (typeset_webpage=true)" if item_type in WEB_TYPES and parent.get("url") else "") + "."
+        return out
 
     # -- adding items ------------------------------------------------------------------------
     def _find_existing(self, item: dict) -> dict | None:
@@ -390,12 +491,23 @@ class LibraryOps:
                 return it
         return None
 
-    def _attach_pdf(self, parent: dict, data: bytes) -> str:
+    def _file_existing(self, existing: dict, collections: list[str]) -> dict:
+        cols = list(existing.get("collections") or [])
+        new_cols = cols + [c for c in collections if c not in cols]
+        if new_cols != cols:
+            res = self.engine.zotero.write_items([{"key": existing["key"], "version": existing["version"], "collections": new_cols}])
+            if existing["key"] in res.versions:
+                self.lib.apply_local_write([{**existing, "collections": new_cols, "version": res.versions[existing["key"]]}])
+        return self.lib.items[existing["key"]]
+
+    def _attach_pdf(self, parent: dict, data: bytes, title: str = "Full Text PDF", tag: str | None = None, url: str = "") -> str:
         key = new_key()
         base = re.sub(r"[^\w\- ,.()]+", "", parent.get("title") or "document")[:80].strip() or "document"
         obj = {"key": key, "version": 0, "itemType": "attachment", "parentItem": parent["key"], "linkMode": "imported_file",
-               "title": "Full Text PDF", "contentType": "application/pdf", "charset": "", "filename": f"{base}.pdf",
-               "md5": None, "mtime": None, "note": "", "tags": [], "relations": {}}
+               "title": title, "contentType": "application/pdf", "charset": "", "filename": f"{base}.pdf",
+               "md5": None, "mtime": None, "note": "", "tags": [{"tag": tag}] if tag else [], "relations": {}}
+        if url:
+            obj["url"] = url
         res = self.engine.zotero.write_items([obj])
         if key not in res.versions:
             raise RuntimeError(f"Zotero refused the attachment: {res.failed.get(key) or 'conflict'}")
@@ -403,6 +515,39 @@ class LibraryOps:
         res2 = self.engine.zotero.write_items([{"key": key, "version": res.versions[key], "md5": md5, "mtime": mtime}])
         self.lib.apply_local_write([{**obj, "version": res2.versions.get(key, res.versions[key]), "md5": md5, "mtime": mtime}])
         return key
+
+    def _same_pdf_attached(self, parent_key: str, data: bytes) -> str | None:
+        import hashlib
+
+        md5 = hashlib.md5(data).hexdigest()
+        return next((a["key"] for a in self._pdf_attachments(parent_key) if a.get("md5") == md5), None)
+
+    def _find_and_attach(self, parent: dict, first: list[PdfAttempt]) -> tuple[dict, object]:
+        """Look for a free PDF of an item and attach the first one found. Returns (a report saying what
+        was tried and why each failed, the first web page seen, for typesetting)."""
+        doi = normalise_doi(parent.get("DOI") or parent.get("extra"))
+        oa_pdfs, oa_pages, notes = self.resolver.open_access_candidates(doi)
+        pages = list(oa_pages)
+        if parent.get("url") and parent["url"] not in {a.url for a in first + oa_pdfs + pages}:
+            pages.append(PdfAttempt(parent["url"], "the item's URL"))
+        data, hit, tried, page = self.resolver.find_pdf(first + oa_pdfs, pages)
+        report: dict = {}
+        if data:
+            same = self._same_pdf_attached(parent["key"], data)
+            if same:
+                hit.result = f"already attached ({same})"
+                report["pdf"] = f"that PDF is already attached ({same})"
+            else:
+                with self._writing():
+                    self._attach_pdf(parent, data, url=hit.url)
+                report["pdf"] = f"PDF attached from {hit.url}"
+        else:
+            report["pdf"] = "no free PDF found"
+        if not data or len(tried) > 1:
+            report["pdf_attempts"] = [a.as_dict() for a in tried]
+        if notes and not data:
+            report["pdf_notes"] = notes
+        return report, page
 
     def add_items(self, queries: list[str], collections: list[str] | None = None, attach_pdfs: bool = True) -> dict:
         if self.resolver is None:
@@ -425,23 +570,15 @@ class LibraryOps:
                 results.append(entry)
                 continue
             if not r.items and r.pdf_urls:
-                entry["error"] = "that link is a bare PDF with no citation data; add the article's page or DOI instead"
+                entry["error"] = ("that link is a bare PDF with no citation data: add the item from its DOI or article page (or create_item), "
+                                  "then attach_pdf with this link")
                 results.append(entry)
                 continue
             for item in r.items:
                 existing = self._find_existing(item)
-                pdf_urls = list(r.pdf_urls)
-                if attach_pdfs and self.resolver.email:
-                    pdf_urls += [u for u in self.resolver.open_access_pdf_urls(normalise_doi(item.get("DOI"))) if u not in pdf_urls]
                 with self._writing():
                     if existing is not None:
-                        cols = list(existing.get("collections") or [])
-                        new_cols = cols + [c for c in collections if c not in cols]
-                        if new_cols != cols:
-                            res = self.engine.zotero.write_items([{"key": existing["key"], "version": existing["version"], "collections": new_cols}])
-                            if existing["key"] in res.versions:
-                                self.lib.apply_local_write([{**existing, "collections": new_cols, "version": res.versions[existing["key"]]}])
-                        parent = self.lib.items[existing["key"]]
+                        parent = self._file_existing(existing, collections)
                         status = "already in library"
                     else:
                         key = new_key()
@@ -453,18 +590,74 @@ class LibraryOps:
                         parent = {**obj, "version": res.versions[key]}
                         self.lib.apply_local_write([parent])
                         status = "added"
-                has_pdf = bool(self._pdf_attachments(parent["key"]))
-                pdf_status = "already had a PDF" if has_pdf else "no free PDF found"
-                if attach_pdfs and not has_pdf:
-                    for url in pdf_urls:
-                        data = self.resolver.fetch_pdf(url)
-                        if data:
-                            with self._writing():
-                                self._attach_pdf(parent, data)
-                            pdf_status = f"PDF attached from {url}"
-                            break
-                elif not attach_pdfs and not has_pdf:
-                    pdf_status = "no PDF (not requested)"
-                results.append({**entry, "key": parent["key"], "title": parent.get("title"), "status": status, "pdf": pdf_status,
-                                "collections": [self._collection_path(c) for c in parent.get("collections") or [] if c in self.lib.collections]})
+                out = {**entry, "key": parent["key"], "title": parent.get("title"), "itemType": parent.get("itemType"), "status": status}
+                if self._pdf_attachments(parent["key"]):
+                    out["pdf"] = "already had a PDF"
+                elif not attach_pdfs:
+                    out["pdf"] = "no PDF (not requested)"
+                else:
+                    report, _page = self._find_and_attach(parent, [PdfAttempt(u, "translator") for u in r.pdf_urls])
+                    out.update(report)
+                    if not self._pdf_attachments(parent["key"]) and parent.get("itemType") in WEB_TYPES:
+                        out["hint"] = "A web article: attach_pdf with typeset_webpage=true makes a tablet PDF of the page's text."
+                out["collections"] = [self._collection_path(c) for c in parent.get("collections") or [] if c in self.lib.collections]
+                results.append(out)
         return {"results": results, "note": "Items in synced collections reach the tablet at the next sync."}
+
+    def attach_pdf(self, item_key: str, url: str | None = None, typeset_webpage: bool = False) -> dict:
+        """Attach a PDF to an existing item: from a link to the PDF or to a page that links to it, or
+        (with no link) by looking for a free copy. ``typeset_webpage`` makes one from an article page's text."""
+        if self.resolver is None:
+            raise RuntimeError("attaching PDFs needs the translation-server settings (see [translation_server] in the config)")
+        parent = self._regular(item_key)
+        if url:
+            data, hit, tried, page = self.resolver.find_pdf([PdfAttempt(url, "given")])
+            report: dict = {}
+            if data:
+                same = self._same_pdf_attached(parent["key"], data)
+                if same:
+                    report["pdf"] = f"that PDF is already attached ({same})"
+                else:
+                    with self._writing():
+                        self._attach_pdf(parent, data, url=hit.url)
+                    report["pdf"] = f"PDF attached from {hit.url}"
+            else:
+                report["pdf"] = "no PDF at that link"
+            if not data or len(tried) > 1:
+                report["pdf_attempts"] = [a.as_dict() for a in tried]
+        elif typeset_webpage:
+            report, page = {}, None  # typeset the item's own page
+        else:
+            if self._pdf_attachments(parent["key"]):
+                return {"key": parent["key"], "pdf": "already has a PDF; pass a url to attach another"}
+            report, page = self._find_and_attach(parent, [])
+        result = {"key": parent["key"], "title": parent.get("title"), **report}
+        attached = report.get("pdf", "").startswith(("PDF attached", "that PDF is already"))
+        if not attached and typeset_webpage:
+            result.update(self._typeset_page(parent, page, url or parent.get("url")))
+        elif not attached and page is not None and parent.get("itemType") in WEB_TYPES:
+            result["hint"] = "This is a web page with no PDF: call again with typeset_webpage=true to make a tablet PDF of its text."
+        if self._pdf_attachments(parent["key"]):
+            result["note"] = "If the item is in a synced collection, the PDF reaches the tablet at the next sync."
+        return result
+
+    def _typeset_page(self, parent: dict, page, url: str | None) -> dict:
+        from ..derive.rendition import RenditionError, render_webpage
+
+        if page is None:
+            if not url:
+                return {"webpage_pdf": "the item has no URL to typeset; pass one"}
+            _data, page, why = self.resolver.fetch(url)
+            if page is None:
+                return {"webpage_pdf": f"couldn't get the page: {why}"}
+        settings = self.engine.settings
+        authors = creators_text(parent)
+        site = parent.get("websiteTitle") or parent.get("blogTitle") or parent.get("publicationTitle") or parent.get("institution") or ""
+        try:
+            pdf = render_webpage(page.html, page.url, settings.epub, title=parent.get("title") or "", byline=authors, site=site,
+                                 date=parent.get("date") or "", pandoc=self.engine.tools.pandoc, font_paths=self.engine.tools.font_paths)
+        except RenditionError as e:
+            return {"webpage_pdf": f"couldn't typeset the page: {e}"}
+        with self._writing():
+            key = self._attach_pdf(parent, pdf, title="Web page (tablet PDF)", tag="rmzotero:webpage", url=page.url)
+        return {"webpage_pdf": f"typeset the page's text into a PDF ({key}); open it in Zotero to check it"}

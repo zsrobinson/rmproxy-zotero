@@ -77,7 +77,7 @@ class Config:
     # Claude connector (ADR 0015); disabled unless a secret is set
     mcp_secret: str = ""
     mcp_listen: str = "0.0.0.0:8788"
-    contact_email: str = ""  # sent to Unpaywall when looking for open-access PDFs
+    contact_email: str = ""  # sent to Unpaywall and OpenAlex when looking for open-access PDFs
     translation_server_url: str = "http://translation-server:1969"
 
     @classmethod

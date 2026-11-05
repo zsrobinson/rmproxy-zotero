@@ -29,6 +29,7 @@ class WriteResult:
         self.failed: dict[str, str] = {}  # key -> error message
         self.conflicts: set[str] = set()
         self.library_version = 0
+        self.data: dict[str, dict] = {}  # key -> the object as the server stored it (when it says)
 
 
 class ZoteroAPI(Protocol):
@@ -92,6 +93,12 @@ class ZoteroClient:
     def write_items(self, objects: list[dict]) -> WriteResult:
         return self._write("/items", objects)
 
+    def schema(self) -> dict:
+        """Zotero's item schema (item types, their fields and creator types)."""
+        r = self.http.get(f"{self.base}/schema", headers={"Zotero-API-Version": "3"})
+        r.raise_for_status()
+        return r.json()
+
     def write_collections(self, objects: list[dict]) -> WriteResult:
         return self._write("/collections", objects)
 
@@ -108,6 +115,8 @@ class ZoteroClient:
             res.library_version = int(r.headers.get("Last-Modified-Version", res.library_version))
             for idx, ok in (body.get("successful") or {}).items():
                 res.versions[ok["key"]] = int(ok.get("version") or ok["data"]["version"])
+                if isinstance(ok.get("data"), dict):
+                    res.data[ok["key"]] = ok["data"]
             for idx in body.get("unchanged") or {}:
                 key = chunk[int(idx)].get("key")
                 if key:
@@ -168,6 +177,11 @@ class MemoryZotero:
     def items(self) -> Iterable[dict]:
         return (o for o in self.objects.values() if o["_kind"] == "item")
 
+    def schema(self) -> dict:
+        from .schema import MINI
+
+        return MINI
+
     # ZoteroAPI
     def changes_since(self, version: int):
         cols = [_strip(o) for o in self.objects.values() if o["_kind"] == "collection" and o["version"] > version]
@@ -194,11 +208,20 @@ class MemoryZotero:
                 if not parent or parent.get("itemType") != "attachment":
                     res.failed[key] = "400: parent must be a file attachment"
                     continue
-            data = {**(cur or {"_kind": "item", "tags": [], "relations": {}}), **{k: v for k, v in o.items() if k != "version"}, "key": key}
+            base = cur or {"_kind": "item", "tags": [], "relations": {}}
+            if cur is not None and o.get("itemType") and o["itemType"] != cur.get("itemType"):
+                # like the server: a type change moves base-mapped fields and drops the rest
+                from .schema import MINI, Schema
+
+                sch = Schema(MINI)
+                if sch.has_type(o["itemType"]):
+                    base = {**sch.apply_type_change(cur, o["itemType"]), "_kind": "item"}
+            data = {**base, **{k: v for k, v in o.items() if k != "version"}, "key": key}
             data["version"] = self._bump()
             data["dateModified"] = _now_iso()
             self.objects[key] = data
             res.versions[key] = data["version"]
+            res.data[key] = _strip(data)
         res.library_version = self.version
         return res
 

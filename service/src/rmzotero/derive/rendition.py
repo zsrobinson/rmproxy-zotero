@@ -38,7 +38,7 @@ LINE_HEIGHT = {100: 1.2, 150: 1.5, 200: 2.0}
 
 # Bump when the conversion changes in a way that could fix books that failed before: failed
 # renditions are then retried right away instead of waiting out their backoff.
-RENDERER_VERSION = 2
+RENDERER_VERSION = 3
 
 # A pandoc filter that turns the EPUB's document tree into something Typst can always compile,
 # working on structure rather than patching pandoc's Typst text afterwards:
@@ -48,7 +48,8 @@ RENDERER_VERSION = 2
 #   does each top-level chapter heading (weak breaks, so doubles collapse);
 # - wrapper divs are unwrapped: a page break inside a container is an error in Typst;
 # - image sizes are kept only as percentages: EPUB pixel sizes come through as bare numbers;
-# - "//" in text would start a Typst comment and swallow the rest of the line.
+# - "//" in text would start a Typst comment and swallow the rest of the line, and "/ " at a line
+#   start would begin a term list; text at a paragraph start that reads as list markup is escaped.
 LUA_FILTER = r"""
 local function internal(target)
   return not target:match("^%a[%w+.-]*:")
@@ -91,22 +92,46 @@ local tidy = {
     return clear(el)
   end,
   Header = clear, CodeBlock = clear, Code = clear, Table = clear, Figure = clear,
+  -- A "/" that follows another "/" would start a Typst comment, and one at the start of a line
+  -- ("/ term") a term list. The previous character may sit in another element (publishers split
+  -- URLs with <wbr> or spans), so a "/" that begins a piece of text is escaped too.
   Str = function(el)
-    if not el.text:find("//", 1, true) then return nil end
-    local out, buf, prev = {}, "", false
+    if not el.text:find("/", 1, true) then return nil end
+    local out, buf, prev, first, changed = {}, "", false, true, false
     for ch in el.text:gmatch(utf8.charpattern) do
-      if ch == "/" and prev then
+      if ch == "/" and (prev or first) then
         if buf ~= "" then out[#out + 1] = pandoc.Str(buf); buf = "" end
         out[#out + 1] = pandoc.RawInline("typst", "\\/")
+        changed = true
       else
         buf = buf .. ch
       end
-      prev = (ch == "/")
+      prev, first = (ch == "/"), false
     end
+    if not changed then return nil end
     if buf ~= "" then out[#out + 1] = pandoc.Str(buf) end
     return out
   end,
 }
+
+-- Text at the start of a paragraph that Typst would read as list markup ("- ", "+ ", "1. ").
+-- pandoc is run with --wrap=none, so a paragraph's start is its only line start.
+local function escape_start(b)
+  local s = b.content[1]
+  if not s or s.t ~= "Str" or b.content[2] == nil or b.content[2].t ~= "Space" then return nil end
+  local lead
+  if s.text == "-" or s.text == "+" then
+    lead = "\\" .. s.text
+  else
+    local digits = s.text:match("^(%d+)%.$")
+    if not digits then return nil end
+    lead = digits .. "\\."
+  end
+  b.content[1] = pandoc.RawInline("typst", lead)
+  return b
+end
+
+local starts = {Para = escape_start, Plain = escape_start}
 
 local breaks = {
   Pandoc = function(doc)
@@ -131,7 +156,7 @@ local last = {
   end,
 }
 
-return {unwrap, tidy, breaks, last}
+return {unwrap, tidy, starts, breaks, last}
 """
 
 
@@ -236,7 +261,7 @@ def render_epub(data: bytes, typography: EpubDefaults, *, pandoc: str = "pandoc"
         (d / "conf.typ").write_text(conf_typst(typography, cover_name))
         (d / "epub.lua").write_text(LUA_FILTER)
         cmd = [pandoc, "book.epub", "-t", "typst", "-s", "-V", "template=conf.typ", "--lua-filter=epub.lua",
-               "--extract-media=media", "-o", "book.typ"]
+               "--extract-media=media", "--wrap=none", "-o", "book.typ"]
         p = subprocess.run(cmd, cwd=d, capture_output=True, text=True, timeout=600)
         if p.returncode != 0:
             raise RenditionError(f"pandoc failed: {p.stderr.strip()[:500]}")
@@ -247,6 +272,54 @@ def render_epub(data: bytes, typography: EpubDefaults, *, pandoc: str = "pandoc"
             return typst.compile(str(d / "book.typ"), root=str(d), font_paths=font_paths or [])
         except Exception as e:  # typst raises its own error type
             raise RenditionError(f"typesetting failed: {_typst_error(e, d / 'book.typ')[:900]}") from e
+
+
+# Web pages: images are dropped (they'd be fetched from the web mid-typesetting, and on news sites
+# they're mostly lazy-loaded placeholders), and so are figures left empty by that.
+WEB_LUA_FILTER = r"""
+return {
+  {Image = function() return {} end},
+  {Figure = function(el)
+     if #pandoc.utils.stringify(el.content) == 0 then return {} end
+   end},
+}
+"""
+MIN_ARTICLE_CHARS = 600
+
+
+def render_webpage(html: str, url: str, typography: EpubDefaults, *, title: str = "", byline: str = "", site: str = "",
+                   date: str = "", pandoc: str = "pandoc", font_paths: list[str] | None = None) -> bytes:
+    """An article web page typeset like a tablet edition: its main text (found the way reader views
+    find it), under a heading with the title, byline, site, date and address."""
+    import html as htmlmod
+
+    import typst
+    from readability import Document
+
+    doc = Document(html, url=url)
+    article = doc.summary(html_partial=True)
+    text = re.sub(r"\s+", " ", htmlmod.unescape(re.sub(r"<[^>]+>", " ", article))).strip()
+    if len(text) < MIN_ARTICLE_CHARS:
+        raise RenditionError("couldn't find the article's text on that page (it may need JavaScript, a login or a subscription)")
+    title = title or doc.short_title() or url
+    details = " · ".join(htmlmod.escape(x) for x in (byline, site, date) if x)
+    head = (f"<h1>{htmlmod.escape(title)}</h1><p>" + (f"<em>{details}</em><br/>" if details else "")
+            + f"{htmlmod.escape(url)}</p><hr/>")
+    with tempfile.TemporaryDirectory(prefix="webpage-") as tmp:
+        d = Path(tmp)
+        (d / "page.html").write_text(f"<html><body>{head}{article}</body></html>")
+        (d / "conf.typ").write_text(conf_typst(typography, None))
+        (d / "web.lua").write_text(WEB_LUA_FILTER)
+        (d / "epub.lua").write_text(LUA_FILTER)
+        cmd = [pandoc, "page.html", "-f", "html", "-t", "typst", "-s", "-V", "template=conf.typ", "--lua-filter=web.lua",
+               "--lua-filter=epub.lua", "--wrap=none", "-o", "page.typ"]
+        p = subprocess.run(cmd, cwd=d, capture_output=True, text=True, timeout=300)
+        if p.returncode != 0:
+            raise RenditionError(f"pandoc failed: {p.stderr.strip()[:500]}")
+        try:
+            return typst.compile(str(d / "page.typ"), root=str(d), font_paths=font_paths or [])
+        except Exception as e:
+            raise RenditionError(f"typesetting failed: {_typst_error(e, d / 'page.typ')[:900]}") from e
 
 
 def _clean_typst(body: str, cover_name: str | None = None) -> str:

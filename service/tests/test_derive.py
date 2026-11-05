@@ -114,10 +114,32 @@ def test_rendition_survives_constructs_from_real_epubs():
     pages = ["".join(c.text for c in tl.chars(i)) for i in range(len(tl))]
     text = "".join(pages)
     assert "either/or // both" in text and "[sic]" in text and "Quoted words" in text
+    assert "schools.example.org//site/Default.aspx?PageID=24788" in text and "a//b" in text and "/ Inner Harbor East." in text
     # every chapter starts on a page of its own
     for title in ("Chapter One", "Chapter Two", "Chapter Three"):
         page = next(p for p in pages if title in p)
         assert page.lstrip().startswith(title), page[:80]
+
+
+@pytest.mark.skipif(not shutil.which("pandoc"), reason="pandoc not installed")
+def test_paragraphs_that_start_like_list_markup_stay_text():
+    import subprocess
+    import tempfile
+
+    import typst
+
+    from rmzotero.derive.rendition import LUA_FILTER
+
+    html = "<p>12. numbered</p><p>+ plus</p><p>- dash and + more</p><p>/ slash</p><ul><li>- item</li></ul>"
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        (d / "t.html").write_text(html)
+        (d / "f.lua").write_text(LUA_FILTER)
+        subprocess.run(["pandoc", "t.html", "-t", "typst", "--wrap=none", "--lua-filter=f.lua", "-o", "t.typ"], cwd=d, check=True)
+        tl = TextLayer(typst.compile(str(d / "t.typ")))
+    text = "".join(c.text for c in tl.chars(0))
+    # as lists they'd read "12. numbered13. plus• dash..."
+    assert text.startswith("12. numbered+ plus- dash and + more/ slash"), text
 
 
 def test_typst_errors_point_at_the_source():

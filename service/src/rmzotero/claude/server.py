@@ -58,10 +58,12 @@ def build(ops: LibraryOps, secret: str) -> FastMCP:
         return _json(await call(ops.diagnostics))
 
     @mcp.tool(annotations=READ)
-    async def search_library(query: str, collection: str | None = None, limit: int = 20) -> str:
+    async def search_library(query: str, collection: str | None = None, limit: int = 20, offset: int = 0) -> str:
         """Find items by words in their title, authors, year, publication, DOI, tags, abstract, or in the text and
-        comments of their annotations. Optionally only within a collection (key) and its subcollections."""
-        return _json(await call(ops.search_library, query, collection, limit))
+        comments of their annotations. Optionally only within a collection (key) and its subcollections.
+        An empty query lists everything in scope, so query="" with a collection lists that collection.
+        Each result says whether the item has a PDF (has_pdf). Up to 100 per call; pass next_offset as offset for more."""
+        return _json(await call(ops.search_library, query, collection, limit, offset))
 
     @mcp.tool(annotations=READ)
     async def get_item(key: str) -> str:
@@ -100,8 +102,28 @@ def build(ops: LibraryOps, secret: str) -> FastMCP:
     async def add_items(queries: list[str], collections: list[str] | None = None, attach_pdfs: bool = True) -> str:
         """Add items to the library from DOIs, ISBNs, arXiv IDs, PMIDs or URLs of article/book pages, using Zotero's
         own translators. Existing items are reused (and filed into the given collections) instead of duplicated.
-        Freely available PDFs are attached; the result says which items have no PDF. Collections are keys."""
+        Freely available PDFs are attached (from the translators, OpenAlex, Unpaywall and the PDF link a landing page
+        declares); when none is, pdf_attempts lists every link tried and why it failed. If a site refuses the
+        translators (common for news sites), use create_item instead. Collections are keys."""
         return _json(await call(ops.add_items, queries, collections, attach_pdfs))
+
+    @mcp.tool(annotations=CHANGE_OPEN)
+    async def attach_pdf(item_key: str, url: str | None = None, typeset_webpage: bool = False) -> str:
+        """Attach a PDF to an existing item. With url: a link to the PDF itself, or to a page that links to it
+        (publisher, repository or DSpace pages declare their PDF). Without url: looks for a free copy by the item's
+        DOI and URL. typeset_webpage=true, for a web article with no PDF, typesets the page's text (url, or the
+        item's URL) into a tablet-sized PDF instead. The result lists each link tried and why it failed."""
+        return _json(await call(ops.attach_pdf, item_key, url, typeset_webpage))
+
+    @mcp.tool(annotations=CHANGE)
+    async def create_item(item_type: str, fields: dict, collections: list[str] | None = None) -> str:
+        """Create an item from metadata you give, for sources no translator can read (blocked news sites, guides,
+        chapters). item_type is a Zotero type (journalArticle, book, bookSection, newspaperArticle, magazineArticle,
+        webpage, blogPost, report...). fields uses Zotero field names (title, date, url, publicationTitle, bookTitle,
+        pages, publisher, institution, websiteTitle, accessDate, DOI, ISBN, abstractNote, extra...) plus creators as
+        names ("Jane Smith" or "Smith, Jane"; {"name": "Org"} for an organisation; {"name"/"firstName"+"lastName",
+        "creatorType": "editor"} for other roles) and tags. An existing match is reused instead. Collections are keys."""
+        return _json(await call(ops.create_item, item_type, fields, collections))
 
     @mcp.tool(annotations=CHANGE)
     async def create_collection(name: str, parent: str | None = None) -> str:
@@ -124,7 +146,10 @@ def build(ops: LibraryOps, secret: str) -> FastMCP:
     async def edit_item(item_key: str, fields: dict | None = None, add_tags: list[str] | None = None,
                         remove_tags: list[str] | None = None) -> str:
         """Change an item's metadata fields (Zotero field names, e.g. title, date, publicationTitle, DOI, abstractNote,
-        creators) and add/remove tags. Collections are changed with file_items."""
+        creators) and add/remove tags. fields={"itemType": "report"} changes its type the way Zotero does: fields
+        with a counterpart move (blogTitle -> websiteTitle), the result lists any dropped with their values, and you
+        can set the new type's own fields (e.g. institution) in the same call. Creators can be given as names
+        ("Jane Smith"). Collections are changed with file_items."""
         return _json(await call(ops.edit_item, item_key, fields, add_tags, remove_tags))
 
     return mcp

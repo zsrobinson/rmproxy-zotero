@@ -17,6 +17,10 @@ from .state import State
 BACKOFF_FIRST = 300.0  # 5 minutes
 BACKOFF_MAX = 86400.0  # a day
 KEEP_CYCLES = 200
+SCAN_CYCLES = 200  # cycles looked at for recent_cycles
+AVERAGE_CYCLES = 20  # cycles averaged for phase_average_seconds
+SHOW_BUSY_CYCLES = 10  # cycles that did something, shown in full
+WORK_FIELDS = ("uploaded", "synced_docs", "derived", "to_zotero", "to_tablet")
 
 
 class Failures:
@@ -99,6 +103,34 @@ def _title(engine, key: str) -> str:
     return it.get("title") or key
 
 
+def _idle(c: dict) -> bool:
+    return not any(c.get(k) for k in WORK_FIELDS) and not c["errors"] and not c["slowest_documents"]
+
+
+def summarise_cycles(cycles: list[dict]) -> list[dict]:
+    """Recent cycles, newest first: the ones that did something in full, and each run of cycles
+    that only checked for changes as one line, so a quiet day doesn't bury the last real sync."""
+    out: list[dict] = []
+    busy = 0
+    for c in cycles:
+        if not _idle(c):
+            if busy == SHOW_BUSY_CYCLES:
+                break
+            out.append(c)
+            busy += 1
+            continue
+        run = out[-1] if out and "idle_cycles" in out[-1] else None
+        if run is None:
+            run = {"idle_cycles": 0, "newest": c["started"], "oldest": c["started"], "average_seconds": 0.0,
+                   "pending": c.get("pending"), "backed_off": c.get("backed_off"), "paused": c.get("paused")}
+            out.append(run)
+        n = run["idle_cycles"]
+        run["average_seconds"] = round((run["average_seconds"] * n + c["seconds"]) / (n + 1), 2)
+        run["idle_cycles"] = n + 1
+        run["oldest"] = c["started"]
+    return out
+
+
 def collect(engine) -> dict:
     """A snapshot for people and for Claude. Safe to call while a sync is running."""
     for _ in range(3):
@@ -119,7 +151,7 @@ def _collect(engine, light: bool = False) -> dict:
     act = engine.activity
 
     cycles = []
-    for r in state.all("SELECT report FROM cycles ORDER BY id DESC LIMIT 20"):
+    for r in state.all(f"SELECT report FROM cycles ORDER BY id DESC LIMIT {SCAN_CYCLES}"):
         rep = json.loads(r["report"])
         cycles.append({
             "started": rep.get("started"), "seconds": round((rep.get("finished") or 0) - (rep.get("started") or 0), 2),
@@ -130,9 +162,9 @@ def _collect(engine, light: bool = False) -> dict:
             "errors": rep.get("errors") or [], "slowest_documents": rep.get("slowest") or [],
         })
     averages: dict[str, float] = {}
-    for c in cycles:
+    for c in cycles[:AVERAGE_CYCLES]:
         for k, v in c["phases"].items():
-            averages[k] = averages.get(k, 0.0) + v / len(cycles)
+            averages[k] = averages.get(k, 0.0) + v / min(len(cycles), AVERAGE_CYCLES)
 
     failures = []
     for f in Failures(state, engine.clock).all():
@@ -178,7 +210,7 @@ def _collect(engine, light: bool = False) -> dict:
         "activity": {"doing": act.what, "for_s": round(now - act.since, 1)},
         "last_cycle": cycles[0] if cycles else None,
         "phase_average_seconds": {k: round(v, 2) for k, v in sorted(averages.items(), key=lambda kv: -kv[1])},
-        "recent_cycles": cycles,
+        "recent_cycles": summarise_cycles(cycles),
         "queue": queue,
         "failures": failures,
         "documents": counts,

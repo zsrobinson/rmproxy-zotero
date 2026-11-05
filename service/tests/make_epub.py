@@ -15,13 +15,17 @@ def png(w=60, h=80, rgb=(200, 80, 40)) -> bytes:
 
 # Constructs from real commercial EPUBs that broke typesetting: chapters wrapped in divs (page
 # breaks inside containers), pixel image sizes (bare numbers in Typst), "//" in text (a Typst
-# comment that swallowed the closing bracket), and a chapter heading inside a block quote.
+# comment that swallowed the closing bracket), and a chapter heading inside a block quote. Also
+# a URL the publisher split with <wbr/> (so "//" spans two pieces of text) and a "/" at the start
+# of a paragraph (a Typst term list).
 TRICKY = """
 <div class="chapter"><div class="inner">
 <h1 id="ch3">Chapter Three</h1>
 <p>Her notes said <em>see either/or // both at https://example.org/a//b for more</em> [sic].</p>
 <p><img src="fig.png" width="600" height="400" alt="wide"/></p>
 <blockquote><h1>An epigraph heading</h1><p>Quoted words.</p></blockquote>
+<p>See <a href="http://schools.example.org//site/Default.aspx?PageID=24788">http://schools.example.org/<wbr/>/site/Default.aspx?PageID=24788</a>; then <span>a/</span>/b.</p>
+<p>/ Inner Harbor East.</p>
 </div></div>
 """
 

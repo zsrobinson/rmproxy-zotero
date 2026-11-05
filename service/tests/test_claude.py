@@ -53,6 +53,10 @@ def resolver(email="me@example.org"):
                                       headers={"content-type": "text/html; charset=utf-8"})
             if req.url.path == "/bitstreams/7/download":
                 return httpx.Response(200, content=REPO_PDF, headers={"content-type": "application/octet-stream"})
+        if req.url.host == "osf.io":
+            if req.url.path == "/dpb36/download":
+                return httpx.Response(200, content=REPO_PDF, headers={"content-type": "application/pdf"})
+            return httpx.Response(200, text="<html><body><div id='app'></div></body></html>", headers={"content-type": "text/html"})
         if req.url.host == "blocked.example.org":
             return httpx.Response(403, text="Forbidden")
         if req.url.host == "news.example.org":
@@ -242,6 +246,11 @@ def test_attach_pdf_from_links_and_pages(lib_world):
     assert [a["from"] for a in res["pdf_attempts"]] == ["OpenAlex (landing page)", "linked from https://repo.example.org/item/7"]
     assert ops.attach_pdf(k)["pdf"].startswith("already has a PDF")
     assert ops.attach_pdf(k, "https://repo.example.org/item/7")["pdf"].startswith("that PDF is already attached")
+
+    # OSF pages are scripts with no PDF link, but the file has a fixed address
+    k3 = ops.create_item("journalArticle", {"title": "Disciplining Play"})["key"]
+    res = ops.attach_pdf(k3, "https://osf.io/preprints/socarxiv/dpb36")
+    assert res["pdf"] == "PDF attached from https://osf.io/dpb36/download"
 
     # nothing free: every reason is given
     k2 = ops.create_item("journalArticle", {"title": "A closed paper", "DOI": "10.5555/closed", "url": "https://blocked.example.org/a"})["key"]

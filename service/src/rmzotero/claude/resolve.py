@@ -73,6 +73,17 @@ class _Meta(HTMLParser):
             self.pdf.append(a["href"].strip())
 
 
+# Repositories whose pages are built by JavaScript, so they declare no PDF link, but whose files sit at a fixed address.
+OSF_RE = re.compile(r"^https?://(?:www\.)?osf\.io/(?:preprints/[a-z]+/)?([a-z0-9]{5}(?:_v\d+)?)(?:[/?#]|$)", re.I)
+
+
+def known_pdf_links(url: str) -> list[str]:
+    m = OSF_RE.match(url)
+    if m and m.group(1).lower() not in ("search", "about", "login"):
+        return [f"https://osf.io/{m.group(1)}/download"]
+    return []
+
+
 def _why(status: int) -> str:
     if status in (401, 403):
         return f"HTTP {status}: the site refused (it needs a login, or blocks automated downloads)"
@@ -259,7 +270,7 @@ class Resolver:
             except Exception:  # malformed markup: whatever was found so far
                 pass
             links = []
-            for link in meta.pdf:
+            for link in meta.pdf + known_pdf_links(final) + known_pdf_links(url):
                 full = urljoin(final, link)
                 if full not in links and full != final:
                     links.append(full)
